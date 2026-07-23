@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: telegram-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_USERNAME
+        value: Dps_storiesbot
+      - key: DEFAULT_ADMIN_ID
+        value: 8323137024
+      - key: ADMIN_IDS
+        value: 8323137024
+      - key: START_MEDIA_URL
+        value: https://ibb.co/ynTDh3tn
+      - key: QR_IMAGE_URL
+        value: https://files.catbox.moe/68r9do.jpg
+      - key: VERIFY_BANNER_URL
+        value: https://files.catbox.moe/rr3cn8.jpg
+     
