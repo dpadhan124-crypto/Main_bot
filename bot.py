@@ -1,6 +1,8 @@
 import os
 import logging
 import requests
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ChatJoinRequest
@@ -14,6 +16,7 @@ from telegram.ext import (
     filters,
 )
 from pymongo import MongoClient
+import certifi
 
 # Load environment variables from .env file
 load_dotenv()
@@ -23,6 +26,20 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# --- WEB SERVER BLOCK FOR RENDER PORT BINDING ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Bot is running successfully!")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 4000))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    logger.info(f"Starting health check web server on port {port}...")
+    server.serve_forever()
 
 # --- CONFIGURATION & DATABASE BLOCK ---
 BOT_USERNAME = os.getenv("BOT_USERNAME", "Dps_storiesbot")
@@ -36,9 +53,9 @@ START_MEDIA_URL = os.getenv("START_MEDIA_URL", "https://ibb.co/ynTDh3tn")
 QR_IMAGE_URL = os.getenv("QR_IMAGE_URL", "https://files.catbox.moe/68r9do.jpg")
 VERIFY_BANNER_URL = os.getenv("VERIFY_BANNER_URL", "https://files.catbox.moe/rr3cn8.jpg")
 
-# MongoDB Configuration
+# MongoDB Configuration with certifi TLS fix for cloud deployments
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
-client = MongoClient(MONGO_URI)
+client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
 db = client["telegram_bot_db"]
 
 channels_collection = db["channels"]
@@ -1232,12 +1249,16 @@ def main():
         logger.error("TELEGRAM_BOT_TOKEN is missing in environment variables!")
         return
 
+    # Start lightweight web server in background thread to satisfy Render port requirements
+    web_thread = threading.Thread(target=run_web_server, daemon=True)
+    web_thread.start()
+
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     # Register handlers
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("add_channel", add_channel_command))
-    app.add_handler(CommandHandler("list_channel", list_channel_command))
+    app.add_handler(CommandHandler(opt := "list_channel", list_channel_command))
     app.add_handler(CommandHandler("settings", settings_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("add_user", add_user_command))
@@ -1252,9 +1273,10 @@ def main():
     if app.job_queue:
         app.job_queue.run_repeating(background_expiry_checker, interval=3600, first=10)
 
-    print("Bot is running with MongoDB backend, media type responses, 7-day free/verify expiry, and premium subscription tracking...")
+    print("Bot is running with MongoDB backend, web server port 4000, and SSL fixes...")
     app.run_polling()
 
 
 if __name__ == "__main__":
     main()
+
