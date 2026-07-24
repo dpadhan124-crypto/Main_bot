@@ -1,5 +1,7 @@
 import os
 import logging
+import random
+import string
 import requests
 import json
 import io
@@ -17,7 +19,6 @@ from telegram.ext import (
     ChatJoinRequestHandler,
     filters,
 )
-
 from pymongo import MongoClient
 from thefuzz import fuzz, process
 
@@ -70,6 +71,13 @@ if settings_collection.count_documents({"_id": "bot_settings"}) == 0:
 PENDING_ADMIN_ACTIONS = {}  
 VERIFICATION_STATE = {}   
 RATE_LIMIT_CACHE = {}     
+
+
+def generate_dps_token() -> str:
+    """Generates a random 15-character token starting with dps_."""
+    chars = string.ascii_letters + string.digits
+    rand_part = ''.join(random.choices(chars, k=12))
+    return f"dps_{rand_part}"
 
 
 def get_settings():
@@ -242,8 +250,10 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in PENDING_ADMIN_ACTIONS:
         del PENDING_ADMIN_ACTIONS[user_id]
-    if "editing_serial" in context.user_data:
-        del context.user_data["editing_serial"]
+    keys_to_clear = ["editing_channel_id", "editing_user_id", "channel_list_search", "user_list_search"]
+    for k in keys_to_clear:
+        if k in context.user_data:
+            del context.user_data[k]
     await update.message.reply_text("❌ Current operation cancelled successfully.")
 
 
@@ -389,26 +399,16 @@ async def render_channel_list_page(update: Update, context: ContextTypes.DEFAULT
 
     lines = ["📋 <b>𝐂𝐇𝐀𝐍𝐍𝐄𝐋𝐒 𝐋𝐈𝐒𝐓:</b>\n"]
     for idx, ch in enumerate(page_items, start=start_idx + 1):
-        more_link_base = bot_settings["more_channel_link"]
-        if not more_link_base.endswith("/"):
-            more_link_base += "/"
-        more_info_val = ch.get("more_info", "")
-        more_info_hyperlink = f"{more_link_base}{more_info_val}" if more_info_val else more_link_base
-        dist_link = ch.get("link", "#")
-
         lines.append(
-            f"{idx}. <b>{ch['name']}</b>\n"
-            f"<blockquote>   Type: {ch['type']} \n"
-            f"Cat: {ch['category']} \n"
-            f"Link: <a href='{dist_link}'>Open Link</a> \n"
-            f"More Info: <a href='{more_info_hyperlink}'>Link</a></blockquote>"
+            f"{idx}. <b>{ch['name']}</b> (ID: <code>{ch.get('id')}</code>)\n"
+            f"   Type: {ch.get('type')} | Cat: {ch.get('category')}\n"
         )
     
     if not page_items:
         lines.append("<i>No channels match your search filter.</i>")
 
     lines.append(f"\nPage {page + 1} of {max_pages + 1 if max_pages >= 0 else 1}")
-    lines.append("<i>Send a serial number to edit/delete channel details.</i>")
+    lines.append("<i>Send a serial number to view/edit/delete channel details.</i>")
 
     keyboard = []
     nav_row = []
@@ -423,7 +423,7 @@ async def render_channel_list_page(update: Update, context: ContextTypes.DEFAULT
     reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
     text_content = "\n".join(lines)
 
-    PENDING_ADMIN_ACTIONS[update.effective_user.id] = "awaiting_serial_select"
+    PENDING_ADMIN_ACTIONS[update.effective_user.id] = "awaiting_channel_serial_select"
 
     if edit_message and update.callback_query:
         await update.callback_query.edit_message_text(text_content, parse_mode="HTML", reply_markup=reply_markup, disable_web_page_preview=True)
@@ -505,7 +505,7 @@ async def render_user_list_page(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data["current_rendered_users"] = all_users
 
     bot_settings = get_settings()
-    ITEMS_PER_PAGE = bot_settings.get("items_per_page", 3)
+    ITEMS_PER_PAGE = bot_settings.get("items_per_page", 5)
     max_pages = (len(all_users) - 1) // ITEMS_PER_PAGE if all_users else 0
     page = max(0, min(page, max_pages))
     context.user_data["user_list_page"] = page
@@ -520,19 +520,17 @@ async def render_user_list_page(update: Update, context: ContextTypes.DEFAULT_TY
         name = data.get("name", "Unknown")
         expiry_val = data.get("expiry")
         expiry_str = expiry_val.strftime('%Y-%m-%d %H:%M') if expiry_val else "None"
-        joined_channels = data.get("joined_channels", [])
-        channel_count = len(joined_channels)
         
         lines.append(
             f"{idx}. <b>{name}</b> (<code>{uid}</code>)\n"
             f"   Expiry: <b>{expiry_str}</b>\n"
-            f"   Channels Joined: <b>{channel_count}</b>\n"
         )
 
     if not page_items:
         lines.append("<i>No users found matching query.</i>")
 
     lines.append(f"\nPage {page + 1} of {max_pages + 1 if max_pages >= 0 else 1}")
+    lines.append("<i>Send a serial number to view/edit user details.</i>")
     response_text = "\n".join(lines)
 
     keyboard = []
@@ -546,6 +544,7 @@ async def render_user_list_page(update: Update, context: ContextTypes.DEFAULT_TY
         keyboard.append(nav_row)
 
     reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+    PENDING_ADMIN_ACTIONS[update.effective_user.id] = "awaiting_user_serial_select"
 
     if edit_message and update.callback_query:
         await update.callback_query.edit_message_text(response_text, parse_mode="HTML", reply_markup=reply_markup)
@@ -607,7 +606,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
                     chat_info = await context.bot.get_chat(ch_id)
                     ch_name = chat_info.title or f"Channel {ch_id}"
-                    start_token = f"ch_{ch_id}"
+                    start_token = generate_dps_token()
                     start_link = f"https://t.me/{BOT_USERNAME}?start={start_token}"
 
                     channels_collection.insert_one({
@@ -643,7 +642,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                         elif line.lower().startswith("link:"):
                             dist_link = line.split(":", 1)[1].strip()
 
-                    token = f"lnk_{abs(hash(ch_name))}"
+                    token = generate_dps_token()
                     channels_collection.insert_one({
                         "id": -999999,
                         "name": ch_name,
@@ -661,24 +660,110 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     await update.message.reply_text(f"❌ Error saving link: {e}")
                     return
 
-            elif state == "awaiting_serial_select":
+            elif state == "awaiting_channel_serial_select":
                 try:
                     serial = int(text)
                     rendered_items = context.user_data.get("current_rendered_channels", [])
                     if 1 <= serial <= len(rendered_items):
                         ch = rendered_items[serial - 1]
-                        context.user_data["editing_serial"] = ch.get("id")
+                        context.user_data["editing_channel_id"] = ch.get("id")
                         
                         keyboard = [
+                            [InlineKeyboardButton("✏️ Edit Channel Data", callback_data=f"edit_ch_data_{ch.get('id')}")],
                             [InlineKeyboardButton("🗑️ Delete Channel", callback_data=f"confirm_del_ch_{ch.get('id')}")],
-                            [InlineKeyboardButton("Cancel", callback_data="confirm_no")]
+                            [InlineKeyboardButton("❌ Cancel", callback_data="confirm_no")]
                         ]
-                        await update.message.reply_text(f"⚠️ Selected Channel: <b>{ch['name']}</b>. Choose action:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+                        await update.message.reply_text(f"📁 Selected Channel: <b>{ch['name']}</b>. Choose action:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
                     else:
                         await update.message.reply_text("❌ Invalid serial number range.")
                 except ValueError:
                     await update.message.reply_text("❌ Please send a valid numeric serial index.")
                 return
+
+            elif state == "awaiting_channel_edit_save":
+                ch_id = context.user_data.get("editing_channel_id")
+                try:
+                    lines = text.split("\n")
+                    updated_fields = {}
+                    for line in lines:
+                        if ":" not in line:
+                            continue
+                        k, v = line.split(":", 1)
+                        k_l = k.strip().lower()
+                        v_s = v.strip()
+                        if "name" in k_l:
+                            updated_fields["name"] = v_s
+                        elif "category" in k_l:
+                            updated_fields["category"] = v_s
+                        elif "type" in k_l:
+                            updated_fields["type"] = v_s.lower()
+                        elif "link" in k_l:
+                            updated_fields["link"] = v_s
+                        elif "more info" in k_l:
+                            updated_fields["more_info"] = v_s
+
+                    channels_collection.update_one({"id": ch_id}, {"$set": updated_fields})
+                    del PENDING_ADMIN_ACTIONS[user_id]
+                    if "editing_channel_id" in context.user_data:
+                        del context.user_data["editing_channel_id"]
+                    await update.message.reply_text("✅ Channel data successfully updated!")
+                    return
+                except Exception as e:
+                    await update.message.reply_text(f"❌ Error updating channel: {e}")
+                    return
+
+            elif state == "awaiting_user_serial_select":
+                try:
+                    serial = int(text)
+                    rendered_users = context.user_data.get("current_rendered_users", [])
+                    if 1 <= serial <= len(rendered_users):
+                        usr = rendered_users[serial - 1]
+                        context.user_data["editing_user_id"] = usr.get("user_id")
+                        
+                        keyboard = [
+                            [InlineKeyboardButton("✏️ Edit User Data", callback_data=f"edit_usr_data_{usr.get('user_id')}")],
+                            [InlineKeyboardButton("❌ Cancel", callback_data="confirm_no")]
+                        ]
+                        await update.message.reply_text(f"👤 Selected User: <b>{usr.get('name')}</b> (<code>{usr.get('user_id')}</code>). Choose action:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+                    else:
+                        await update.message.reply_text("❌ Invalid serial number range.")
+                except ValueError:
+                    await update.message.reply_text("❌ Please send a valid numeric serial index.")
+                return
+
+            elif state == "awaiting_user_edit_save":
+                target_uid = context.user_data.get("editing_user_id")
+                try:
+                    lines = text.split("\n")
+                    new_name = None
+                    new_expiry = None
+                    for line in lines:
+                        if ":" not in line:
+                            continue
+                        k, v = line.split(":", 1)
+                        k_l = k.strip().lower()
+                        v_s = v.strip()
+                        if "name" in k_l:
+                            new_name = v_s
+                        elif "expiry" in k_l:
+                            if v_s.lower() != "none":
+                                new_expiry = datetime.strptime(v_s, "%Y-%m-%d %H:%M")
+
+                    upd = {}
+                    if new_name is not None:
+                        upd["name"] = new_name
+                    if new_expiry is not None:
+                        upd["expiry"] = new_expiry
+
+                    users_collection.update_one({"user_id": target_uid}, {"$set": upd})
+                    del PENDING_ADMIN_ACTIONS[user_id]
+                    if "editing_user_id" in context.user_data:
+                        del context.user_data["editing_user_id"]
+                    await update.message.reply_text("✅ User data successfully updated!")
+                    return
+                except Exception as e:
+                    await update.message.reply_text(f"❌ Error updating user data: {e}")
+                    return
 
             elif state == "awaiting_settings_edit":
                 try:
@@ -759,7 +844,7 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     p1 = bot_settings["prices"]["1"]
     p2 = bot_settings["prices"]["2"]
     p3 = bot_settings["prices"]["3"]
-    qr_url = bot_settings.get("qr_image_url", QR_IMAGE_URL)
+    qr_url = bot_settings.get("qr_image_url", "https://files.catbox.moe/68r9do.jpg")
 
     plan_text = (
         "💎 <b>𝐏𝐑𝐄𝐌𝐈𝐔𝐌 𝐒𝐔𝐁𝐒𝐂𝐑𝐈𝐏𝐓𝐈𝐎𝐍 𝐏𝐋𝐀𝐍𝐒</b>\n\n"
@@ -801,7 +886,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• /backup - Database backup\n"
             "• /broadcast - Broadcast message\n"
             "• /add_user - Grant user validity\n"
-            "• /list_user - List users with channel metrics"
+            "• /list_user - List users with channel metrics\n"
+            "• /cancel - Cancel any current process"
         )
         await update.message.reply_text(user_help + admin_help, parse_mode="HTML")
     else:
@@ -853,7 +939,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             target_invite_link = matched_item["link"]
             
-            # Record joined channel
             users_collection.update_one(
                 {"user_id": user_id},
                 {"$addToSet": {"joined_channels": matched_item["name"]}}
@@ -869,7 +954,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(message_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
             return
 
-    start_url = bot_settings.get("start_media_url", START_MEDIA_URL)
+    start_url = bot_settings.get("start_media_url", "https://ibb.co/ynTDh3tn")
     await update.message.reply_photo(photo=start_url, caption=tr(user_id, "welcome"), parse_mode="HTML")
 
 
@@ -978,6 +1063,56 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ch_id = int(data.replace("confirm_del_ch_", ""))
         channels_collection.delete_one({"id": ch_id})
         await query.edit_message_text("✅ Channel successfully deleted!")
+        return
+
+    if data.startswith("edit_ch_data_"):
+        if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
+            return
+        ch_id = int(data.replace("edit_ch_data_", ""))
+        ch_rec = channels_collection.find_one({"id": ch_id})
+        if not ch_rec:
+            await query.message.reply_text("❌ Channel record not found.")
+            return
+
+        PENDING_ADMIN_ACTIONS[user_id] = "awaiting_channel_edit_save"
+        context.user_data["editing_channel_id"] = ch_id
+
+        edit_template = (
+            f"Name: {ch_rec.get('name', '')}\n"
+            f"Category: {ch_rec.get('category', '')}\n"
+            f"Type: {ch_rec.get('type', 'free')}\n"
+            f"Link: {ch_rec.get('link', '')}\n"
+            f"More Info: {ch_rec.get('more_info', '')}"
+        )
+        await query.message.reply_text("✏️ <b>Edit Channel Data Template:</b>\n\n" + f"<code>{edit_template}</code>", parse_mode="HTML")
+        return
+
+    if data.startswith("edit_usr_data_"):
+        if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
+            return
+        target_uid = int(data.replace("edit_usr_data_", ""))
+        usr_rec = users_collection.find_one({"user_id": target_uid})
+        if not usr_rec:
+            await query.message.reply_text("❌ User record not found.")
+            return
+
+        PENDING_ADMIN_ACTIONS[user_id] = "awaiting_user_edit_save"
+        context.user_data["editing_user_id"] = target_uid
+
+        expiry_val = usr_rec.get("expiry")
+        expiry_str = expiry_val.strftime('%Y-%m-%d %H:%M') if expiry_val else "None"
+
+        edit_template = (
+            f"Name: {usr_rec.get('name', 'User')}\n"
+            f"Expiry: {expiry_str}"
+        )
+        await query.message.reply_text("✏️ <b>Edit User Data Template:</b>\n\n" + f"<code>{edit_template}</code>", parse_mode="HTML")
+        return
+
+    if data == "confirm_no":
+        if user_id in PENDING_ADMIN_ACTIONS:
+            del PENDING_ADMIN_ACTIONS[user_id]
+        await query.edit_message_text("❌ Action cancelled.")
         return
 
     if data == "edit_settings_prompt":
