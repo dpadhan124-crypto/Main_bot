@@ -65,7 +65,7 @@ if settings_collection.count_documents({"_id": "bot_settings"}) == 0:
             "2": "95",
             "3": "140"
         },
-        "start_media_url": "https://ibb.co/ynTDh3tn",
+        "start_media_url": "https://i.ibb.co/h1KnJtCh/x.jpg",
         "qr_image_url": "https://files.catbox.moe/68r9do.jpg",
         "verify_banner_url": "https://files.catbox.moe/rr3cn8.jpg",
         "about_message": "✨ <b>Welcome to our Bot!</b>\n\nWe provide high-quality digital resources, instant updates, and secure content access channels. Upgrade to Premium to enjoy zero restrictions and direct links!",
@@ -96,7 +96,7 @@ def get_settings():
             "video_tutorial_link": DEFAULT_VIDEO_TUTORIAL_URL,
             "force_subscribe_ids": [],
             "prices": {"1": "49", "2": "95", "3": "140"},
-            "start_media_url": "https://ibb.co/ynTDh3tn",
+            "start_media_url": "https://i.ibb.co/h1KnJtCh/x.jpg",
             "qr_image_url": "https://files.catbox.moe/68r9do.jpg",
             "verify_banner_url": "https://files.catbox.moe/rr3cn8.jpg",
             "about_message": "✨ <b>Welcome to our Bot!</b>\n\nWe provide high-quality digital resources, instant updates, and secure content access channels. Upgrade to Premium to enjoy zero restrictions and direct links!",
@@ -1092,7 +1092,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(message_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
             return
 
-    start_url = bot_settings.get("start_media_url", "https://files.catbox.moe/aqak0m.jpg")
+    start_url = bot_settings.get("start_media_url", "https://i.ibb.co/h1KnJtCh/x.jpg")
     await update.message.reply_photo(photo=start_url, caption=tr(user_id, "welcome"), parse_mode="HTML")
 
 
