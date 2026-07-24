@@ -68,6 +68,7 @@ if settings_collection.count_documents({"_id": "bot_settings"}) == 0:
         "start_media_url": "https://ibb.co/ynTDh3tn",
         "qr_image_url": "https://files.catbox.moe/68r9do.jpg",
         "verify_banner_url": "https://files.catbox.moe/rr3cn8.jpg",
+        "about_message": "✨ <b>Welcome to our Bot!</b>\n\nWe provide high-quality digital resources, instant updates, and secure content access channels. Upgrade to Premium to enjoy zero restrictions and direct links!",
         "maintenance_mode": False,
         "maintenance_message": "🛠️ Bot is currently under maintenance. Please check back later!",
         "items_per_page": 10
@@ -98,6 +99,7 @@ def get_settings():
             "start_media_url": "https://ibb.co/ynTDh3tn",
             "qr_image_url": "https://files.catbox.moe/68r9do.jpg",
             "verify_banner_url": "https://files.catbox.moe/rr3cn8.jpg",
+            "about_message": "✨ <b>Welcome to our Bot!</b>\n\nWe provide high-quality digital resources, instant updates, and secure content access channels. Upgrade to Premium to enjoy zero restrictions and direct links!",
             "maintenance_mode": False,
             "maintenance_message": "🛠️ Bot is currently under maintenance. Please check back later!",
             "items_per_page": 10
@@ -121,14 +123,14 @@ def normalize_text(text: str) -> str:
 
 LOCALIZATION_STRINGS = {
     "en": {
-        "welcome": "👋 Welcome!\nSend me any keyword or phrase to search our database.",
+        "welcome": "👋 Hello <b>{user_name}</b>, and welcome to <b>{bot_name}</b>!\n✨ <i>Your ultimate gateway to fast, secure, and organized digital resources.</i>\n\n<blockquote>───────────────────\n📌 <b>What you can do here:</b>\n• 🔍 <b>Instant Search:</b> Send any keyword or phrase to quickly find what you're looking for.\n• 📁 <b>Category Browsing:</b> Filter content effortlessly by your favorite categories.\n• 💎 <b>Premium Access:</b> Upgrade to enjoy zero restrictions and direct link unlocks.\n───────────────────</blockquote>\n\n💡 <i>To get started, simply type your search query below or explore our options using the buttons!</i>",
         "maintenance": "🛠️ Bot is currently under maintenance. Please check back later!",
         "unauthorized": "⛔ You are not authorized to use this command."
     },
     "hi": {
-        "welcome": "👋 स्वागत है!\nहमारे डेटाबेस में खोजने के लिए कोई भी कीवर्ड या वाक्यांश भेजें।",
+        "welcome": "👋 Hello <b>{user_name}</b>, और <b>{bot_name}</b> में आपका स्वागत है!\n✨ <i>तेज़, सुरक्षित और संगठित डिजिटल संसाधनों के लिए आपका अंतिम प्रवेश द्वार।</i>\n\n<blockquote>───────────────────\n📌 <b>आप यहां क्या कर सकते हैं</b>\n• 🔍 <b>Instant Search:</b> आप जो खोज रहे हैं उसे तुरंत खोजने के लिए कोई भी कीवर्ड या वाक्यांश भेजें।\n• 📁 <b>Category Browsing:</b> अपनी पसंदीदा श्रेणियों द्वारा सामग्री को आसानी से फ़िल्टर करें।\n• 💎 <b>Premium Access:</b> शून्य प्रतिबंधों का आनंद लेने के लिए अपग्रेड करें और सीधा लिंक अनलॉक करें।\n───────────────────</blockquote>\n\n💡 <i>आरंभ करने के लिए, बस नीचे अपनी खोज क्वेरी टाइप करें या बटनों का उपयोग करके हमारे विकल्पों का अन्वेषण करें!</i>",
         "maintenance": "🛠️ बॉट वर्तमान में रखरखाव के अधीन है। कृपया बाद में जाँच करें!",
-        "unauthorized": "⛔ आप इस कमांड का उपयोग करने के लिए अधिकृत नहीं हैं।"
+        "unauthorized": "⛔ आप इस कमांड का उपयोग करने के लिए अधिकृत नहीं हैं."
     }
 }
 
@@ -278,10 +280,10 @@ async def add_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     template = (
         "Channel id:\n"
         "Type:free/verify/premium\n"
-        "Category:\n"
+        "Category: Cat1, Cat2, Cat3\n"
         "More info:"
     )
-    await update.message.reply_text("📥 <b>Send channel details template:</b>\n\n" + f"<blockquote><code>{template}</code></blockquote>", parse_mode="HTML")
+    await update.message.reply_text("📥 <b>Send channel details template (Supports multiple categories separated by commas):</b>\n\n" + f"<blockquote><code>{template}</code></blockquote>", parse_mode="HTML")
 
 
 async def add_link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -295,11 +297,11 @@ async def add_link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     template = (
         "Channel Name:\n"
         "Types:\n"
-        "Category:\n"
+        "Category: Cat1, Cat2\n"
         "More:\n"
         "Link:"
     )
-    await update.message.reply_text("🔗 <b>Send distribution link template:</b>\n\n" + f"<blockquote><code>{template}</code></blockquote>", parse_mode="HTML")
+    await update.message.reply_text("🔗 <b>Send distribution link template (Supports multiple categories separated by commas):</b>\n\n" + f"<blockquote><code>{template}</code></blockquote>", parse_mode="HTML")
 
 
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -324,6 +326,7 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>Start Media URL:</b> {bot_settings.get('start_media_url', 'Default')}\n"
         f"<b>QR/Pay Image URL:</b> {bot_settings.get('qr_image_url', 'Default')}\n"
         f"<b>Verify Banner URL:</b> {bot_settings.get('verify_banner_url', 'Default')}\n"
+        f"<b>About Message:</b> Configured\n"
         f"<b>Maintenance Mode:</b> {bot_settings.get('maintenance_mode', False)}"
         "</blockquote>"
     )
@@ -371,6 +374,14 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(stats_text, parse_mode="HTML")
 
 
+async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await maintenance_check(update, context):
+        return
+    bot_settings = get_settings()
+    about_text = bot_settings.get("about_message", "✨ <b>Welcome to our Bot!</b>\n\nWe provide high-quality digital resources, instant updates, and secure content access channels.")
+    await update.message.reply_text(about_text, parse_mode="HTML", disable_web_page_preview=True)
+
+
 async def list_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     bot_settings = get_settings()
@@ -412,9 +423,11 @@ async def render_channel_list_page(update: Update, context: ContextTypes.DEFAULT
 
     lines = ["📋 <b>𝐂𝐇𝐀𝐍𝐍𝐄𝐋𝐒 𝐋𝐈𝐒𝐓:</b>\n"]
     for idx, ch in enumerate(page_items, start=start_idx + 1):
+        cats_val = ch.get('categories') or [ch.get('category', 'General')]
+        cats_str = ", ".join(cats_val)
         lines.append(
             f"<blockquote>{idx}. <b>{ch['name']}</b> (ID: <code>{ch.get('id')}</code>)\n"
-            f"   Type: {ch.get('type')} | Cat: {ch.get('category')}</blockquote>"
+            f"   Type: {ch.get('type')} | Cats: {cats_str}</blockquote>"
         )
     
     if not page_items:
@@ -426,10 +439,10 @@ async def render_channel_list_page(update: Update, context: ContextTypes.DEFAULT
     keyboard = []
     nav_row = []
     if page > 0:
-        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data="ch_page_prev"))
+        nav_row.append(InlineKeyboardButton("« 𝐵𝑎𝑐𝑘", callback_data="ch_page_prev"))
     nav_row.append(InlineKeyboardButton("🔍 Search Channel", callback_data="ch_search_prompt"))
     if end_idx < len(items):
-        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data="ch_page_next"))
+        nav_row.append(InlineKeyboardButton("𝑀𝑜𝑟𝑒 »", callback_data="ch_page_next"))
     if nav_row:
         keyboard.append(nav_row)
 
@@ -503,14 +516,23 @@ async def list_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["user_list_page"] = 0
     context.user_data["user_list_search"] = ""
+    context.user_data["user_filter_type"] = "all"
     await render_user_list_page(update, context, edit_message=False)
 
 
 async def render_user_list_page(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message: bool = False):
     page = context.user_data.get("user_list_page", 0)
     search_filter = context.user_data.get("user_list_search", "")
+    filter_type = context.user_data.get("user_filter_type", "all")
 
+    now = datetime.now()
     all_users = list(users_collection.find({}).sort("expiry", 1))
+
+    if filter_type == "premium":
+        all_users = [u for u in all_users if u.get("expiry") and u["expiry"] > now]
+    elif filter_type == "free":
+        all_users = [u for u in all_users if not u.get("expiry") or u["expiry"] <= now]
+
     if search_filter:
         sf = normalize_text(search_filter)
         all_users = [u for u in all_users if sf in str(u["user_id"]) or sf in normalize_text(u.get("name", ""))]
@@ -527,7 +549,7 @@ async def render_user_list_page(update: Update, context: ContextTypes.DEFAULT_TY
     end_idx = start_idx + ITEMS_PER_PAGE
     page_items = all_users[start_idx:end_idx]
 
-    lines = ["👥 <b>𝐔𝐒𝐄𝐑𝐒 𝐕𝐀𝐋𝐈𝐃𝐈𝐓𝐘 𝐋𝐈𝐒𝐓:</b>\n"]
+    lines = [f"👥 <b>𝐔𝐒𝐄𝐑𝐒 𝐕𝐀𝐋𝐈𝐃𝐈𝐓𝐘 𝐋𝐈𝐒𝐓 ({filter_type.upper()}):</b>\n"]
     for idx, data in enumerate(page_items, start=start_idx + 1):
         uid = data["user_id"]
         name = data.get("name", "Unknown")
@@ -546,13 +568,19 @@ async def render_user_list_page(update: Update, context: ContextTypes.DEFAULT_TY
     lines.append("<i>Send a serial number to view/edit user details.</i>")
     response_text = "\n".join(lines)
 
-    keyboard = []
+    keyboard = [
+        [
+            InlineKeyboardButton("🌐 All", callback_data="usr_filter_all"),
+            InlineKeyboardButton("💎 Premium", callback_data="usr_filter_premium"),
+            InlineKeyboardButton("👤 Free", callback_data="usr_filter_free"),
+        ]
+    ]
     nav_row = []
     if page > 0:
-        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data="usr_page_prev"))
+        nav_row.append(InlineKeyboardButton("« 𝐵𝑎𝑐𝑘", callback_data="usr_page_prev"))
     nav_row.append(InlineKeyboardButton("🔍 Search User", callback_data="usr_search_prompt"))
     if end_idx < len(all_users):
-        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data="usr_page_next"))
+        nav_row.append(InlineKeyboardButton("𝑀𝑜𝑟𝑒 »", callback_data="usr_page_next"))
     if nav_row:
         keyboard.append(nav_row)
 
@@ -606,16 +634,20 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             if state == "awaiting_channel_details":
                 try:
                     lines = text.split("\n")
-                    ch_id, c_type, c_category, more_info = None, None, None, ""
+                    ch_id, c_type, c_category_raw, more_info = None, None, "", ""
                     for line in lines:
                         if line.lower().startswith("channel id:"):
                             ch_id = int(line.split(":", 1)[1].strip())
                         elif line.lower().startswith("type:"):
                             c_type = line.split(":", 1)[1].strip().lower()
                         elif line.lower().startswith("category:"):
-                            c_category = line.split(":", 1)[1].strip()
+                            c_category_raw = line.split(":", 1)[1].strip()
                         elif line.lower().startswith("more info:"):
                             more_info = line.split(":", 1)[1].strip()
+
+                    categories_list = [c.strip() for c in c_category_raw.split(",") if c.strip()]
+                    if not categories_list:
+                        categories_list = ["General"]
 
                     try:
                         chat_member = await context.bot.get_chat_member(ch_id, context.bot.id)
@@ -645,7 +677,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     channels_collection.insert_one({
                         "id": ch_id,
                         "name": ch_name,
-                        "category": c_category,
+                        "categories": categories_list,
+                        "category": categories_list[0],
                         "type": c_type,
                         "link": start_link,
                         "token": start_token,
@@ -653,7 +686,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     })
 
                     del PENDING_ADMIN_ACTIONS[user_id]
-                    await update.message.reply_text(f"✅ Channel <b>{ch_name}</b> added successfully with programmatic join link generation!", parse_mode="HTML")
+                    await update.message.reply_text(f"✅ Channel <b>{ch_name}</b> added successfully with multiple categories indexing!", parse_mode="HTML")
                     return
                 except Exception as e:
                     await update.message.reply_text(f"❌ Error parsing format: {e}")
@@ -662,24 +695,29 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             elif state == "awaiting_link_details":
                 try:
                     lines = text.split("\n")
-                    ch_name, c_type, c_category, more_info, dist_link = "", "free", "", "", ""
+                    ch_name, c_type, c_category_raw, more_info, dist_link = "", "free", "", "", ""
                     for line in lines:
                         if line.lower().startswith("channel name:"):
                             ch_name = line.split(":", 1)[1].strip()
                         elif line.lower().startswith("types:"):
                             c_type = line.split(":", 1)[1].strip().lower()
                         elif line.lower().startswith("category:"):
-                            c_category = line.split(":", 1)[1].strip()
+                            c_category_raw = line.split(":", 1)[1].strip()
                         elif line.lower().startswith("more:"):
                             more_info = line.split(":", 1)[1].strip()
                         elif line.lower().startswith("link:"):
                             dist_link = line.split(":", 1)[1].strip()
 
+                    categories_list = [c.strip() for c in c_category_raw.split(",") if c.strip()]
+                    if not categories_list:
+                        categories_list = ["General"]
+
                     token = generate_dps_token()
                     channels_collection.insert_one({
                         "id": -999999,
                         "name": ch_name,
-                        "category": c_category,
+                        "categories": categories_list,
+                        "category": categories_list[0],
                         "type": c_type,
                         "link": dist_link,
                         "token": token,
@@ -687,7 +725,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     })
 
                     del PENDING_ADMIN_ACTIONS[user_id]
-                    await update.message.reply_text(f"✅ Distribution Link for <b>{ch_name}</b> added successfully!", parse_mode="HTML")
+                    await update.message.reply_text(f"✅ Distribution Link for <b>{ch_name}</b> added successfully with random start token and multi-categories!", parse_mode="HTML")
                     return
                 except Exception as e:
                     await update.message.reply_text(f"❌ Error saving link: {e}")
@@ -727,7 +765,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                         if "name" in k_l:
                             updated_fields["name"] = v_s
                         elif "category" in k_l:
-                            updated_fields["category"] = v_s
+                            cat_list = [c.strip() for c in v_s.split(",") if c.strip()]
+                            updated_fields["categories"] = cat_list
+                            updated_fields["category"] = cat_list[0] if cat_list else "General"
                         elif "type" in k_l:
                             updated_fields["type"] = v_s.lower()
                         elif "link" in k_l:
@@ -806,31 +846,43 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     new_start_url = bot_settings.get("start_media_url", "")
                     new_qr_url = bot_settings.get("qr_image_url", "")
                     new_verify_url = bot_settings.get("verify_banner_url", "")
+                    new_about_msg = bot_settings.get("about_message", "")
                     new_prices = bot_settings["prices"].copy()
 
-                    for line in lines:
-                        if ":" not in line:
-                            continue
-                        key, val = line.split(":", 1)
-                        key_l = key.strip().lower()
-                        val_s = val.strip()
+                    current_key = None
+                    current_val_lines = []
 
-                        if "more channel link" in key_l:
-                            new_more_link = val_s
-                        elif "video tutorial link" in key_l:
-                            new_video_link = val_s
-                        elif "start media url" in key_l:
-                            new_start_url = val_s
-                        elif "qr/pay image url" in key_l or "qr image url" in key_l:
-                            new_qr_url = val_s
-                        elif "verify banner url" in key_l:
-                            new_verify_url = val_s
-                        elif "1 month price" in key_l:
-                            new_prices["1"] = val_s
-                        elif "2 month price" in key_l:
-                            new_prices["2"] = val_s
-                        elif "3 month price" in key_l:
-                            new_prices["3"] = val_s
+                    for line in lines:
+                        if ":" in line and any(line.lower().startswith(p) for p in ["more channel link", "video tutorial link", "start media url", "qr/pay image url", "qr image url", "verify banner url", "about message", "1 month price", "2 month price", "3 month price"]):
+                            if current_key:
+                                val_s = "\n".join(current_val_lines).strip()
+                                if current_key == "more channel link": new_more_link = val_s
+                                elif current_key == "video tutorial link": new_video_link = val_s
+                                elif current_key == "start media url": new_start_url = val_s
+                                elif current_key in ["qr/pay image url", "qr image url"]: new_qr_url = val_s
+                                elif current_key == "verify banner url": new_verify_url = val_s
+                                elif current_key == "about message": new_about_msg = val_s
+                                elif current_key == "1 month price": new_prices["1"] = val_s
+                                elif current_key == "2 month price": new_prices["2"] = val_s
+                                elif current_key == "3 month price": new_prices["3"] = val_s
+                            
+                            parts = line.split(":", 1)
+                            current_key = parts[0].strip().lower()
+                            current_val_lines = [parts[1].strip()]
+                        else:
+                            current_val_lines.append(line)
+
+                    if current_key:
+                        val_s = "\n".join(current_val_lines).strip()
+                        if current_key == "more channel link": new_more_link = val_s
+                        elif current_key == "video tutorial link": new_video_link = val_s
+                        elif current_key == "start media url": new_start_url = val_s
+                        elif current_key in ["qr/pay image url", "qr image url"]: new_qr_url = val_s
+                        elif current_key == "verify banner url": new_verify_url = val_s
+                        elif current_key == "about message": new_about_msg = val_s
+                        elif current_key == "1 month price": new_prices["1"] = val_s
+                        elif current_key == "2 month price": new_prices["2"] = val_s
+                        elif current_key == "3 month price": new_prices["3"] = val_s
 
                     update_settings({
                         "more_channel_link": new_more_link,
@@ -838,11 +890,12 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                         "start_media_url": new_start_url,
                         "qr_image_url": new_qr_url,
                         "verify_banner_url": new_verify_url,
+                        "about_message": new_about_msg,
                         "prices": new_prices
                     })
 
                     del PENDING_ADMIN_ACTIONS[user_id]
-                    await update.message.reply_text("✅ Settings, video tutorial link, and image URLs updated successfully!")
+                    await update.message.reply_text("✅ Settings and About message updated successfully!")
                     return
                 except Exception as e:
                     await update.message.reply_text(f"❌ Error updating settings: {e}")
@@ -884,16 +937,18 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     plan_text = (
         "💎 <b>𝐏𝐑𝐄𝐌𝐈𝐔𝐌 𝐒𝐔𝐁𝐒𝐂𝐑𝐈𝐏𝐓𝐈𝐎𝐍 𝐏𝐋𝐀𝐍𝐒</b>\n\n"
+        "<i>Unlock exclusive access, skip all verifications, and get instant links to all premium content instantly!</i>\n\n"
         "<blockquote>"
-        f"• <b>₹{p1} INR</b> for 1 Month\n"
-        f"• <b>₹{p2} INR</b> for 2 Months\n"
-        f"• <b>₹{p3} INR</b> for 3 Months\n\n"
-        "<b>UPI ID:</b> <code>fshhs@hshs</code>"
+        f"• <b>1 Month:</b> ₹{p1} INR\n"
+        f"• <b>2 Months:</b> ₹{p2} INR\n"
+        f"• <b>3 Months:</b> ₹{p3} INR\n\n"
+        "💳 <b>UPI ID:</b> <code>padhand171@okicici</code>\n"
+        "📌 <i>Scan QR code to pay instantly via any UPI app.</i>"
         "</blockquote>"
     )
     keyboard = [
         [InlineKeyboardButton("💳 Pay Now", url="https://rb.gy/81kgkx")],
-        [InlineKeyboardButton("📤 Send Screenshot", url="https://t.me/idffajnbot")]
+        [InlineKeyboardButton("📤 Send Screenshot", url="https://t.me/Digital_adminbot")]
     ]
     await update.message.reply_photo(photo=qr_url, caption=plan_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -911,8 +966,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /start - Start bot\n"
         "• /plan - View subscription plans\n"
         "• /stats - Account status\n"
+        "• /about - About bot information\n"
         "• /language - Toggle language\n"
         "• /help - Help guide"
+        "• /cancel - Cancel any current process"
         "</blockquote>"
     )
 
@@ -927,8 +984,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• /backup - Database backup\n"
             "• /broadcast - Broadcast message\n"
             "• /add_user - Grant user validity\n"
-            "• /list_user - List users with channel metrics\n"
-            "• /cancel - Cancel any current process"
+            "• /list_user - List users with filters\n"
             "</blockquote>"
         )
         await update.message.reply_text(user_help + admin_help, parse_mode="HTML")
@@ -1028,7 +1084,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "<blockquote>"
                 f"<b>𝙽𝚊𝚖𝚎:</b> {matched_item['name']}\n"
                 f"<b>𝚃𝚢𝚙𝚎:</b> {c_type.capitalize()}\n"
-                f"<b>𝙲𝚊𝚝𝚎𝚐𝚘𝚛𝚢:</b> {matched_item['category']}"
+                f"<b>𝙲𝚊𝚝𝚎𝚐𝚘𝚛𝚢:</b> {', '.join(matched_item.get('categories', [matched_item.get('category', 'General')]))}"
                 "</blockquote>"
             )
             keyboard = [[InlineKeyboardButton("𝙹𝚘𝚒𝚗 𝙲𝚑𝚊𝚗𝚗𝚎𝚕", url=target_invite_link)]]
@@ -1057,7 +1113,11 @@ async def handle_search_message_logic(update: Update, context: ContextTypes.DEFA
     all_channels = list(channels_collection.find({}))
     norm_query = normalize_text(query)
 
-    found_items = [ch for ch in all_channels if norm_query in normalize_text(ch["name"]) or norm_query in normalize_text(ch.get("category", ""))]
+    found_items = []
+    for ch in all_channels:
+        cats = [normalize_text(c) for c in ch.get("categories", [ch.get("category", "")])]
+        if norm_query in normalize_text(ch["name"]) or any(norm_query in c for c in cats):
+            found_items.append(ch)
 
     suggestions = []
     if not found_items:
@@ -1075,6 +1135,7 @@ async def handle_search_message_logic(update: Update, context: ContextTypes.DEFA
     context.user_data["current_page"] = 0
     context.user_data["active_type_filter"] = None
     context.user_data["active_cat_filter"] = None
+    context.user_data["category_browse_mode"] = False
 
     await send_search_results(update, context, edit_message=False)
 
@@ -1083,18 +1144,26 @@ async def send_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = context.user_data.get("search_query", "")
     all_channels = list(channels_collection.find({}))
     total_items = len(all_channels)
-    found_items = context.user_data.get("found_items", all_channels)
-    found_count = len(found_items)
-    suggestions = context.user_data.get("search_suggestions", [])
     
-    type_filter = context.user_data.get("active_type_filter")
+    category_browse_mode = context.user_data.get("category_browse_mode", False)
     cat_filter = context.user_data.get("active_cat_filter")
+    type_filter = context.user_data.get("active_type_filter")
 
-    filtered_items = found_items
-    if type_filter:
-        filtered_items = [item for item in filtered_items if item.get("type", "").lower() == type_filter.lower()]
-    if cat_filter:
-        filtered_items = [item for item in filtered_items if normalize_text(item.get("category", "")) == normalize_text(cat_filter)]
+    if category_browse_mode and cat_filter:
+        filtered_items = []
+        for ch in all_channels:
+            cats = [normalize_text(c) for c in ch.get("categories", [ch.get("category", "")])]
+            if normalize_text(cat_filter) in cats:
+                filtered_items.append(ch)
+        found_count = len(filtered_items)
+    else:
+        found_items = context.user_data.get("found_items", all_channels)
+        found_count = len(found_items)
+        filtered_items = found_items
+        if type_filter:
+            filtered_items = [item for item in filtered_items if item.get("type", "").lower() == type_filter.lower()]
+        if cat_filter:
+            filtered_items = [item for item in filtered_items if normalize_text(cat_filter) in [normalize_text(c) for c in item.get("categories", [item.get("category", "")])]]
 
     page = context.user_data.get("current_page", 0)
     bot_settings = get_settings()
@@ -1108,27 +1177,30 @@ async def send_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE
     current_page_items = filtered_items[start_idx:end_idx]
 
     text_lines = [
-        "📊 <b>𝐒𝐄𝐀𝐑𝐂𝐇 𝐀𝐍𝐀𝐋𝐘𝐓𝐈𝐂𝐒</b>",
+        "📊 <b>𝐒𝐄𝐀𝐑𝐂𝐇 & 𝐁𝐑𝐎𝐖𝐒𝐄 𝐀𝐍𝐀𝐋𝐘𝐓𝐈𝐂𝐒</b>" if not category_browse_mode else "📁 <b>𝐂𝐀𝐓𝐄𝐆𝐎𝐑𝐘 𝐁𝐑𝐎𝐖𝐒𝐄𝐑</b>",
         "──────────────────────────",
         "<blockquote>"
         f"▪ 𝐓𝐨𝐭𝐚𝐥 𝐈𝐭𝐞𝐦𝐬         : {total_items:,}\n"
         f"▪ 𝐌𝐚𝐭𝐜𝐡𝐞𝐬 𝐅𝐨𝐮𝐧𝐝  : {found_count:,}\n"
-        f"▪ 𝐐𝐮𝐞𝐫𝐲 𝐒𝐭𝐫𝐢𝐧𝐠      : &quot;{query}&quot;\n"
+        f"▪ 𝐐𝐮𝐞𝐫𝐲/𝐂𝐚𝐭        : &quot;{cat_filter if category_browse_mode and cat_filter else query}&quot;\n"
         f"▪ 𝐍𝐚𝐯𝐢𝐠𝐚𝐭𝐢𝐨𝐧          : 𝐏𝐚𝐠𝐞 {page + 1} of {max_pages + 1 if max_pages >= 0 else 1}"
         "</blockquote>",
         "──────────────────────────",
-        "📌 <b>𝐌𝐀𝐓𝐂𝐇𝐈𝐍𝐆 𝐑𝐄𝐂𝐎𝐑𝐃𝐒:</b>",
+        "📌 <b>𝐑𝐄𝐂𝐎𝐑𝐃𝐒:</b>",
     ]
+
+    suggestions = context.user_data.get("search_suggestions", [])
 
     if not current_page_items:
         text_lines.append("<i>No items found matching your filter criteria.</i>")
-        if suggestions:
+        if suggestions and not category_browse_mode:
             text_lines.append("\n💡 <b>Did you mean:</b>")
             for sug in suggestions:
                 text_lines.append(f"• <code>{sug}</code>")
     else:
         for idx, item in enumerate(current_page_items, start=start_idx + 1):
-            main_link = item.get("link", "#")
+            token = item.get("token")
+            access_link = f"https://t.me/{BOT_USERNAME}?start={token}" if token else item.get("link", "#")
             more_info_val = item.get("more_info", "")
             
             if more_info_val and more_info_val.isdigit():
@@ -1140,8 +1212,9 @@ async def send_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE
             else:
                 more_link = bot_settings.get("more_channel_link", "https://t.me/")
 
+            cats_display = ", ".join(item.get("categories", [item.get("category", "General")]))
             text_lines.append(
-                f"<blockquote>{idx}. <a href=\"{main_link}\">{item['name']}</a> [{item['type'].upper()}]\n"
+                f"<blockquote>{idx}. <a href=\"{access_link}\">{item['name']}</a> [{item['type'].upper()}] - ({cats_display})\n"
                 f"   /n<a href=\"{more_link}\">More Info</a></blockquote>"
             )
 
@@ -1149,21 +1222,21 @@ async def send_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     keyboard = [
         [
-            InlineKeyboardButton("🟢 Free", callback_data="filter_type_free"),
-            InlineKeyboardButton("🟡 Verify", callback_data="filter_type_verify"),
-            InlineKeyboardButton("🟣 Premium", callback_data="filter_type_premium"),
+            InlineKeyboardButton("ⓕ Free", callback_data="filter_type_free"),
+            InlineKeyboardButton("ⓥ Verify", callback_data="filter_type_verify"),
+            InlineKeyboardButton("ⓟ Premium", callback_data="filter_type_premium"),
         ],
         [
-            InlineKeyboardButton("🏷️ Category Filter", callback_data="prompt_category_filter"),
-            InlineKeyboardButton("🔄 Reset Filters", callback_data="filter_reset")
+            InlineKeyboardButton("🗂️ Category", callback_data="prompt_category_filter"),
+            InlineKeyboardButton("🔁 Filters", callback_data="filter_reset")
         ]
     ]
 
     nav_row = []
     if page > 0:
-        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data="prev_page"))
+        nav_row.append(InlineKeyboardButton("« 𝐵𝑎𝑐𝑘", callback_data="prev_page"))
     if end_idx < len(filtered_items):
-        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data="next_page"))
+        nav_row.append(InlineKeyboardButton("𝑀𝑜𝑟𝑒 »", callback_data="next_page"))
     if nav_row:
         keyboard.append(nav_row)
 
@@ -1214,9 +1287,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         PENDING_ADMIN_ACTIONS[user_id] = "awaiting_channel_edit_save"
         context.user_data["editing_channel_id"] = ch_id
 
+        cats_str = ", ".join(ch_rec.get('categories', [ch_rec.get('category', '')]))
         edit_template = (
             f"Name: {ch_rec.get('name', '')}\n"
-            f"Category: {ch_rec.get('category', '')}\n"
+            f"Category: {cats_str}\n"
             f"Type: {ch_rec.get('type', 'free')}\n"
             f"Link: {ch_rec.get('link', '')}\n"
             f"More Info: {ch_rec.get('more_info', '')}"
@@ -1262,6 +1336,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Start Media URL: {bot_settings.get('start_media_url', '')}\n"
             f"QR/Pay Image URL: {bot_settings.get('qr_image_url', '')}\n"
             f"Verify Banner URL: {bot_settings.get('verify_banner_url', '')}\n"
+            f"About Message: {bot_settings.get('about_message', '')}\n"
             f"1 month price: {bot_settings['prices']['1']}\n"
             f"2 month price: {bot_settings['prices']['2']}\n"
             f"3 month price: {bot_settings['prices']['3']}"
@@ -1292,8 +1367,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "<blockquote>"
             f"<b>𝙽𝚊𝚖𝚎:</b> {matched_item['name']}\n"
             f"<b>𝚃𝚢𝚙𝚎:</b> {matched_item['type'].capitalize()}\n"
-            f"<b>𝙲𝚊𝚝𝚎𝚐𝚘𝚛𝚢:</b> {matched_item['category']}\n"
-            "🕒 <b>Access Duration:</b> 7 Days"
+            f"<b>𝙲𝚊𝚝𝚎𝚐𝚘𝚛𝚢:</b> {', '.join(matched_item.get('categories', [matched_item.get('category', 'General')]))}\n"
+            "<b>Access Duration:</b> 7 Days"
             "</blockquote>"
         )
         keyboard = [[InlineKeyboardButton("𝙹𝚘𝚒𝚗 𝙲𝚑𝚊𝚗𝚗𝚎𝚕", url=target_invite_link)]]
@@ -1308,20 +1383,34 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "prompt_category_filter":
         all_channels = list(channels_collection.find({}))
-        categories = sorted(list(set(ch.get("category", "General") for ch in all_channels if ch.get("category"))))
+        extracted_cats = set()
+        
+        category_browse_mode = context.user_data.get("category_browse_mode", False)
+        
+        target_source = all_channels
+        if not category_browse_mode and context.user_data.get("found_items"):
+            target_source = context.user_data.get("found_items")
+
+        for ch in target_source:
+            cats = ch.get("categories", [ch.get("category", "General")])
+            for c in cats:
+                if c:
+                    extracted_cats.add(c.strip())
+        categories = sorted(list(extracted_cats))
         
         cat_keyboard = [[InlineKeyboardButton("📁 All Categories", callback_data="set_cat_all")]]
         for cat in categories:
             cat_keyboard.append([InlineKeyboardButton(f"📁 {cat}", callback_data=f"set_cat_{cat}")])
         cat_keyboard.append([InlineKeyboardButton("🔙 Back to Results", callback_data="back_to_search_results")])
         
-        await query.edit_message_text("📂 <b>Select a category to filter by:</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(cat_keyboard))
+        await query.edit_message_text("📂 <b>Select a category to filter/browse by:</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(cat_keyboard))
         return
 
     if data.startswith("set_cat_"):
         cat_val = data.replace("set_cat_", "")
         if cat_val == "all":
             context.user_data["active_cat_filter"] = None
+            context.user_data["category_browse_mode"] = False
         else:
             context.user_data["active_cat_filter"] = cat_val
         context.user_data["current_page"] = 0
@@ -1329,14 +1418,22 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "back_to_search_results":
+        context.user_data["category_browse_mode"] = False
         await send_search_results(update, context, edit_message=True)
         return
 
     if data == "filter_reset":
-        context.user_data["active_type_filter"] = None
-        context.user_data["active_cat_filter"] = None
+        # Scoped exclusively to current search items list (no database reset)
+        if "found_items" in context.user_data:
+            context.user_data["found_items"] = context.user_data.get("found_items", [])
         context.user_data["current_page"] = 0
         await send_search_results(update, context, edit_message=True)
+        return
+
+    if data.startswith("usr_filter_"):
+        context.user_data["user_filter_type"] = data.replace("usr_filter_", "")
+        context.user_data["user_list_page"] = 0
+        await render_user_list_page(update, context, edit_message=True)
         return
 
     if data == "next_page":
@@ -1395,6 +1492,7 @@ def main():
     app.add_handler(CommandHandler("list_channel", list_channel_command))
     app.add_handler(CommandHandler("settings", settings_command))
     app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("about", about_command))
     app.add_handler(CommandHandler("add_user", add_user_command))
     app.add_handler(CommandHandler("list_user", list_user_command))
     app.add_handler(CommandHandler("plan", plan_command))
@@ -1413,4 +1511,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
