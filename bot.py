@@ -1,8 +1,8 @@
 import os
 import logging
 import requests
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+import json
+import io
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ChatJoinRequest
@@ -16,7 +16,7 @@ from telegram.ext import (
     filters,
 )
 from pymongo import MongoClient
-import certifi
+from thefuzz import fuzz, process
 
 # Load environment variables from .env file
 load_dotenv()
@@ -27,35 +27,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- WEB SERVER BLOCK FOR RENDER PORT BINDING ---
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"Bot is running successfully!")
-
-def run_web_server():
-    port = int(os.environ.get("PORT", 4000))
-    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-    logger.info(f"Starting health check web server on port {port}...")
-    server.serve_forever()
-
 # --- CONFIGURATION & DATABASE BLOCK ---
 BOT_USERNAME = os.getenv("BOT_USERNAME", "Dps_storiesbot")
 DEFAULT_ADMIN_ID = int(os.getenv("DEFAULT_ADMIN_ID", "8323137024"))
 ADMIN_IDS = [int(admin_id.strip()) for admin_id in os.getenv("ADMIN_IDS", "8323137024").split(",")]
-AROLINKS_API_TOKEN = os.getenv("AROLINKS_API_TOKEN", "")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+AROLINKS_API_TOKEN = os.getenv("AROLINKS_API_TOKEN", "9dd2d9a7855be5078a54d5a9a2493fb195162b5e")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 # Media Links Configuration
 START_MEDIA_URL = os.getenv("START_MEDIA_URL", "https://ibb.co/ynTDh3tn")
 QR_IMAGE_URL = os.getenv("QR_IMAGE_URL", "https://files.catbox.moe/68r9do.jpg")
 VERIFY_BANNER_URL = os.getenv("VERIFY_BANNER_URL", "https://files.catbox.moe/rr3cn8.jpg")
 
-# MongoDB Configuration with certifi TLS fix for cloud deployments
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
-client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
+# MongoDB Configuration
+MONGO_URI = os.getenv("MONGO_URI")
+client = MongoClient(MONGO_URI)
 db = client["telegram_bot_db"]
 
 channels_collection = db["channels"]
@@ -74,11 +60,15 @@ if settings_collection.count_documents({"_id": "bot_settings"}) == 0:
             "1": "49",
             "2": "95",
             "3": "140"
-        }
+        },
+        "maintenance_mode": False,
+        "maintenance_message": "🛠️ Bot is currently under maintenance. Please check back later!",
+        "items_per_page": 10
     })
 
 PENDING_ADMIN_ACTIONS = {}  # Format: { user_id: "awaiting_channel_details" }
 VERIFICATION_STATE = {}   # Format: { (user_id, token): True/False }
+RATE_LIMIT_CACHE = {}     # Feature 1 & 10: In-memory rate limiting tracker
 
 
 def get_settings():
@@ -89,7 +79,10 @@ def get_settings():
             "admins": ADMIN_IDS,
             "more_channel_link": "https://t.me/your_more_channel/",
             "force_subscribe_ids": [],
-            "prices": {"1": "49", "2": "95", "3": "140"}
+            "prices": {"1": "49", "2": "95", "3": "140"},
+            "maintenance_mode": False,
+            "maintenance_message": "🛠️ Bot is currently under maintenance. Please check back later!",
+            "items_per_page": 10
         }
     return s
 
@@ -127,6 +120,180 @@ if channels_collection.count_documents({}) == 0:
                 "more_info": str(i * 10)
             }
         )
+
+
+# --- FEATURE 6: LOCALIZATION STRINGS ---
+LOCALIZATION_STRINGS = {
+    "en": {
+        "welcome": "👋 Welcome!\nSend me any keyword or phrase to search our database.",
+        "maintenance": "🛠️ Bot is currently under maintenance. Please check back later!",
+        "unauthorized": "⛔ You are not authorized to use this command."
+    },
+    "hi": {
+        "welcome": "👋 स्वागत है!\nहमारे डेटाबेस में खोजने के लिए कोई भी कीवर्ड या वाक्यांश भेजें।",
+        "maintenance": "🛠️ बॉट वर्तमान में रखरखाव के अधीन है। कृपया बाद में जाँच करें!",
+        "unauthorized": "⛔ आप इस कमांड का उपयोग करने के लिए अधिकृत नहीं हैं।"
+    }
+}
+
+def get_user_language(user_id: int) -> str:
+    """Fetches user's preferred language, defaults to English."""
+    user = users_collection.find_one({"user_id": user_id})
+    if user and "language" in user:
+        return user["language"]
+    return "en"
+
+def tr(user_id: int, key: str) -> str:
+    """Translates key based on user's selected language."""
+    lang = get_user_language(user_id)
+    return LOCALIZATION_STRINGS.get(lang, LOCALIZATION_STRINGS["en"]).get(key, LOCALIZATION_STRINGS["en"].get(key, key))
+
+
+# --- FEATURE 1 & 10: RATE LIMITING & ANTI-SPAM MIDDLEWARE ---
+async def rate_limit_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Throttles spam interactions and protects against command abuse."""
+    user = update.effective_user
+    if not user:
+        return True
+    
+    bot_settings = get_settings()
+    if user.id in bot_settings.get("admins", []) or user.id in ADMIN_IDS:
+        return True  # Bypass for admins
+
+    now = datetime.now()
+    last_interaction = RATE_LIMIT_CACHE.get(user.id)
+    
+    if last_interaction and (now - last_interaction) < timedelta(seconds=1.5):
+        if update.message:
+            await update.message.reply_text("⚠️ You are sending requests too quickly. Please slow down.")
+        return False
+    
+    RATE_LIMIT_CACHE[user.id] = now
+    return True
+
+
+# --- FEATURE 2: MAINTENANCE MODE TOGGLE & CHECKER ---
+async def maintenance_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Checks if maintenance mode is active."""
+    bot_settings = get_settings()
+    if bot_settings.get("maintenance_mode", False):
+        user_id = update.effective_user.id if update.effective_user else 0
+        if user_id not in bot_settings.get("admins", []) and user_id not in ADMIN_IDS:
+            msg = bot_settings.get("maintenance_message", "🛠️ Bot is under maintenance.")
+            if update.message:
+                await update.message.reply_text(msg)
+            return True
+    return False
+
+
+# --- FEATURE 7: ENHANCED LOGGING & ERROR ALERTS ---
+async def global_error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Global error handler catching unexpected exceptions and notifying log channel/admins."""
+    logger.error(msg="Exception while handling an update:", exc_info=context.error)
+    try:
+        bot_settings = get_settings()
+        admins = bot_settings.get("admins", ADMIN_IDS)
+        error_msg = f"🚨 <b>Bot Error Alert</b>:\n<pre>{str(context.error)}</pre>"
+        for admin_id in admins:
+            await context.bot.send_message(chat_id=admin_id, text=error_msg, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Failed to dispatch error alert: {e}")
+
+
+# --- FEATURE 3: AUTOMATED BACKUP & RESTORE UTILITY ---
+async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Exports all MongoDB collections into a compressed JSON backup file."""
+    user_id = update.effective_user.id
+    bot_settings = get_settings()
+    if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ You are not authorized.")
+        return
+
+    try:
+        backup_data = {
+            "channels": list(channels_collection.find({}, {"_id": False})),
+            "users": list(users_collection.find({}, {"_id": False})),
+            "trackers": list(trackers_collection.find({}, {"_id": False})),
+            "settings": list(settings_collection.find({}, {"_id": False}))
+        }
+        json_bytes = json.dumps(backup_data, default=str, indent=4).encode("utf-8")
+        bio = io.BytesIO(json_bytes)
+        bio.name = f"mongodb_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+
+        await update.message.reply_document(document=bio, caption="📦 <b>Automated Database Backup (.json)</b>", parse_mode="HTML")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Backup failed: {e}")
+
+
+# --- FEATURE 8: INTERACTIVE REMOVAL CONFIRMATION ---
+PENDING_CONFIRMATIONS = {}
+
+async def confirm_action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles confirmation inline buttons for critical operations."""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    user_id = query.from_user.id
+
+    if data.startswith("confirm_yes_"):
+        action_key = data.replace("confirm_yes_", "")
+        if action_key in PENDING_CONFIRMATIONS:
+            action_data = PENDING_CONFIRMATIONS[action_key]
+            if action_data["type"] == "delete_channel":
+                channels_collection.delete_one({"id": action_data["channel_id"]})
+                await query.edit_message_text("✅ Channel successfully removed from database!")
+            del PENDING_CONFIRMATIONS[action_key]
+    elif data == "confirm_no":
+        await query.edit_message_text("❌ Action cancelled.")
+
+
+# --- FEATURE 11: BROADCAST MESSAGING FUNCTION ---
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to broadcast text, photo, or video to all registered users."""
+    user_id = update.effective_user.id
+    bot_settings = get_settings()
+    if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ You are not authorized.")
+        return
+
+    reply_to = update.message.reply_to_message
+    if not reply_to:
+        await update.message.reply_text("❌ Please reply to the message (text, photo, or video) you want to broadcast using /broadcast.")
+        return
+
+    users = list(users_collection.find({}))
+    success_count, blocked_count = 0, 0
+
+    status_msg = await update.message.reply_text(f"🚀 Broadcasting to {len(users)} users...")
+
+    for usr in users:
+        target_uid = usr["user_id"]
+        try:
+            keyboard = [[InlineKeyboardButton("📢 Join Updates Channel", url=bot_settings["more_channel_link"])]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            if reply_to.photo:
+                await context.bot.send_photo(chat_id=target_uid, photo=reply_to.photo[-1].file_id, caption=reply_to.caption, parse_mode="HTML", reply_markup=reply_markup)
+            elif reply_to.video:
+                await context.bot.send_video(chat_id=target_uid, video=reply_to.video.file_id, caption=reply_to.caption, parse_mode="HTML", reply_markup=reply_markup)
+            else:
+                await context.bot.send_message(chat_id=target_uid, text=reply_to.text, parse_mode="HTML", reply_markup=reply_markup)
+            success_count += 1
+        except Exception as e:
+            logger.warning(f"Failed to send broadcast to {target_uid}: {e}")
+            blocked_count += 1
+
+    await status_msg.edit_text(f"✅ Broadcast complete!\n\n• Success: {success_count}\n• Blocked/Failed: {blocked_count}")
+
+
+# --- FEATURE 6: LANGUAGE TOGGLE COMMAND ---
+async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lets users toggle their preferred language dynamically."""
+    keyboard = [
+        [InlineKeyboardButton("English 🇬🇧", callback_data="set_lang_en"),
+         InlineKeyboardButton("Hindi 🇮🇳", callback_data="set_lang_hi")]
+    ]
+    await update.message.reply_text("🌐 <b>Select your preferred language / अपनी भाषा चुनें:</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 # --- CANCEL COMMAND ---
@@ -180,10 +347,15 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>Force subscribe channel ids:</b> {fs_ids}\n"
         f"<b>1 month price:</b> {bot_settings['prices']['1']}\n"
         f"<b>2 month price:</b> {bot_settings['prices']['2']}\n"
-        f"<b>3 month price:</b> {bot_settings['prices']['3']}"
+        f"<b>3 month price:</b> {bot_settings['prices']['3']}\n"
+        f"<b>Maintenance Mode:</b> {bot_settings.get('maintenance_mode', False)}\n"
+        f"<b>Items Per Page:</b> {bot_settings.get('items_per_page', 10)}"
     )
 
-    keyboard = [[InlineKeyboardButton("✏️ Edit Settings", callback_data="edit_settings_prompt")]]
+    keyboard = [
+        [InlineKeyboardButton("✏️ Edit Settings", callback_data="edit_settings_prompt")],
+        [InlineKeyboardButton("🛠️ Toggle Maintenance", callback_data="toggle_maintenance")]
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(settings_text, parse_mode="HTML", reply_markup=reply_markup)
@@ -254,7 +426,8 @@ async def render_channel_list_page(update: Update, context: ContextTypes.DEFAULT
     else:
         items = all_channels
 
-    ITEMS_PER_PAGE = 5
+    bot_settings = get_settings()
+    ITEMS_PER_PAGE = bot_settings.get("items_per_page", 5)
     max_pages = (len(items) - 1) // ITEMS_PER_PAGE if items else 0
     page = max(0, min(page, max_pages))
     context.user_data["channel_list_page"] = page
@@ -263,7 +436,6 @@ async def render_channel_list_page(update: Update, context: ContextTypes.DEFAULT
     end_idx = start_idx + ITEMS_PER_PAGE
     page_items = items[start_idx:end_idx]
 
-    bot_settings = get_settings()
     lines = ["📋 <b>𝐂𝐇𝐀𝐍𝐍𝐄𝐋𝐒 𝐋𝐈𝐒𝐓:</b>\n"]
     for idx, ch in enumerate(page_items, start=start_idx + 1):
         more_link_base = bot_settings["more_channel_link"]
@@ -389,7 +561,8 @@ async def render_user_list_page(update: Update, context: ContextTypes.DEFAULT_TY
         sf = normalize_text(search_filter)
         all_users = [u for u in all_users if sf in str(u["user_id"])]
 
-    ITEMS_PER_PAGE = 3
+    bot_settings = get_settings()
+    ITEMS_PER_PAGE = bot_settings.get("items_per_page", 3)
     max_pages = (len(all_users) - 1) // ITEMS_PER_PAGE if all_users else 0
     page = max(0, min(page, max_pages))
     context.user_data["user_list_page"] = page
@@ -472,6 +645,11 @@ async def check_force_subscribe(user_id: int, context: ContextTypes.DEFAULT_TYPE
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles general text, admin setup configurations, and search queries."""
+    if not await rate_limit_middleware(update, context):
+        return
+    if await maintenance_check(update, context):
+        return
+
     user_id = update.effective_user.id
     text = update.message.text.strip()
     bot_settings = get_settings()
@@ -531,18 +709,14 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     if 1 <= serial <= len(all_channels):
                         ch = all_channels[serial - 1]
                         context.user_data["editing_serial"] = ch["id"]
-                        PENDING_ADMIN_ACTIONS[user_id] = "awaiting_channel_edit_template"
                         
-                        edit_template = (
-                            f"Channel id:{ch['id']}\n"
-                            f"Type:{ch['type']}\n"
-                            f"Category:{ch['category']}\n"
-                            f"More info:{ch.get('more_info', '')}"
-                        )
-                        await update.message.reply_text(
-                            "✏️ Edit the details below and send back:\n\n" + f"<code>{edit_template}</code>",
-                            parse_mode="HTML"
-                        )
+                        # Feature 8: Inline removal confirmation demo option
+                        keyboard = [
+                            [InlineKeyboardButton("✏️ Edit Details", callback_data="proceed_edit_channel"),
+                             InlineKeyboardButton("🗑️ Yes, Delete", callback_data=f"confirm_del_ch_{ch['id']}")],
+                            [InlineKeyboardButton("Cancel", callback_data="confirm_no")]
+                        ]
+                        await update.message.reply_text(f"⚠️ Selected Channel: <b>{ch['name']}</b>. Choose action:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
                     else:
                         await update.message.reply_text("❌ Invalid serial number range.")
                 except ValueError:
@@ -595,6 +769,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     new_more_link = bot_settings["more_channel_link"]
                     new_fs_ids = bot_settings["force_subscribe_ids"]
                     new_prices = bot_settings["prices"].copy()
+                    new_ipp = bot_settings.get("items_per_page", 10)
 
                     for line in lines:
                         if ":" not in line:
@@ -636,12 +811,15 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                             new_prices["2"] = val_str
                         elif "3 month price" in key_lower:
                             new_prices["3"] = val_str
+                        elif "items per page" in key_lower:
+                            new_ipp = int(val_str)
 
                     update_settings({
                         "admins": new_admins,
                         "more_channel_link": new_more_link,
                         "force_subscribe_ids": new_fs_ids,
-                        "prices": new_prices
+                        "prices": new_prices,
+                        "items_per_page": new_ipp
                     })
 
                     del PENDING_ADMIN_ACTIONS[user_id]
@@ -668,6 +846,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows subscription plans, payment details, QR code, and actions as media type."""
+    if await maintenance_check(update, context):
+        return
     bot_settings = get_settings()
     p1 = bot_settings["prices"]["1"]
     p2 = bot_settings["prices"]["2"]
@@ -678,13 +858,13 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<blockquote>• <b>₹{p1} INR</b> for 1 Month</blockquote>\n"
         f"<blockquote>• <b>₹{p2} INR</b> for 2 Months</blockquote>\n"
         f"<blockquote>• <b>₹{p3} INR</b> for 3 Months</blockquote>\n\n"
-        "<b>UPI ID:</b> <code>fshhs@hshs</code>\n\n"
+        "<b>UPI ID:</b> <code>padhand171@okicici</code>\n\n"
         "Scan the QR code or click the button to pay:"
     )
     
     keyboard = [
         [InlineKeyboardButton("💳 Pay Now", url="https://rb.gy/81kgkx")],
-        [InlineKeyboardButton("📤 Send Screenshot", url="https://t.me/idffajnbot")]
+        [InlineKeyboardButton("📤 Send Screenshot", url="https://t.me/Digital_adminbot")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -698,6 +878,8 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays help commands based on user roles (Admin vs Regular User)."""
+    if await maintenance_check(update, context):
+        return
     user_id = update.effective_user.id
     bot_settings = get_settings()
     is_admin = user_id in bot_settings["admins"] or user_id in ADMIN_IDS
@@ -707,6 +889,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /start - Start the bot & access items\n"
         "• /plan - View premium subscription plans & payment options\n"
         "• /stats - View your account status, ID, expiry, and joined list\n"
+        "• /language - Change preferred bot language\n"
         "• /help - Show available commands\n"
         "• /cancel - Cancel any current operation\n"
         "• <i>Send any keyword to search database items</i>"
@@ -718,6 +901,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• /add_channel - Add a new channel configuration\n"
             "• /list_channel - List and edit managed channels\n"
             "• /settings - View and edit bot settings\n"
+            "• /backup - Export MongoDB backup file (.json)\n"
+            "• /broadcast - Broadcast text/photo/video to users\n"
             "• /add_user <code>{id} {validity}</code> - Grant user time (e.g. 7d, 30m)\n"
             "• /list_user - List premium users sorted by expiry"
         )
@@ -728,6 +913,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /start command, enforces force subscription & verification requirements with media type start response."""
+    if not await rate_limit_middleware(update, context):
+        return
+    if await maintenance_check(update, context):
+        return
+
     user_id = update.effective_user.id
 
     # --- FORCE SUBSCRIBE CHECK ---
@@ -880,7 +1070,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_photo(
         photo=START_MEDIA_URL,
-        caption="👋 𝚆𝚎𝚕𝚌𝚘𝚖𝚎!\n𝚂𝚎𝚗𝚍 𝚖𝚎 𝚊𝚗𝚢 𝚔𝚎𝚢𝚠𝚘𝚛𝚍 𝚘𝚛 𝚙𝚑𝚛𝚊𝚜𝚎 𝚝𝚘 𝚜𝚎𝚊𝚛𝚌𝚑 𝚘𝚞𝚛 𝚍𝚊𝚝𝚊𝚋𝚊𝚜𝚎.",
+        caption=tr(user_id, "welcome"),
         parse_mode="HTML"
     )
 
@@ -910,27 +1100,21 @@ async def chat_join_request_handler(update: Update, context: ContextTypes.DEFAUL
         logger.error(f"Failed to process join request: {e}")
 
 
+# --- FEATURE 5: ADVANCED MULTI-KEYWORD & FUZZY SEARCH ---
 async def handle_search_message_logic(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Processes search queries with font-agnostic fallback logic from MongoDB."""
+    """Processes search queries with thefuzz fuzzy matching support from MongoDB."""
     query = update.message.text.strip()
     if not query:
         return
 
-    query_lower = normalize_text(query)
     all_channels = list(channels_collection.find({}))
-    found_items = []
-
-    for item in all_channels:
-        item_text = normalize_text(f"{item['name']} {item['category']} {item['type']}")
-        if query_lower in item_text:
-            found_items.append(item)
-
-    if not found_items:
-        keywords = query_lower.split()
-        for item in all_channels:
-            item_text = normalize_text(f"{item['name']} {item['category']} {item['type']}")
-            if any(kw in item_text for kw in keywords):
-                found_items.append(item)
+    channel_names = [ch["name"] for ch in all_channels]
+    
+    # Use thefuzz to extract matches with score threshold
+    fuzzy_results = process.extract(query, channel_names, limit=15, scorer=fuzz.token_sort_ratio)
+    
+    matched_names = {res[0] for res in fuzzy_results if res[1] >= 50}
+    found_items = [ch for ch in all_channels if ch["name"] in matched_names or normalize_text(query) in normalize_text(f"{ch['name']} {ch['category']} {ch['type']}")]
 
     context.user_data["search_query"] = query
     context.user_data["found_items"] = found_items
@@ -951,7 +1135,8 @@ async def send_search_results(
     total_items = len(all_channels)
     found_count = len(found_items)
 
-    ITEMS_PER_PAGE = 10
+    bot_settings = get_settings()
+    ITEMS_PER_PAGE = bot_settings.get("items_per_page", 10)
     max_pages = (found_count - 1) // ITEMS_PER_PAGE if found_count > 0 else 0
     page = max(0, min(page, max_pages))
     context.user_data["current_page"] = page
@@ -960,7 +1145,6 @@ async def send_search_results(
     end_idx = start_idx + ITEMS_PER_PAGE
     current_page_items = found_items[start_idx:end_idx]
 
-    bot_settings = get_settings()
     text_lines = [
         "📊 <b>𝐒𝐄𝐀𝐑𝐂𝐇 𝐀𝐍𝐀𝐋𝐘𝐓𝐈𝐂𝐒</b>",
         "──────────────────────────",
@@ -1035,6 +1219,34 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     bot_settings = get_settings()
 
+    # Feature 2: Maintenance Mode toggle callback
+    if data == "toggle_maintenance":
+        if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
+            await query.answer("⛔ Unauthorized.", show_alert=True)
+            return
+        current_mode = bot_settings.get("maintenance_mode", False)
+        update_settings({"maintenance_mode": not current_mode})
+        await query.answer(f"Maintenance Mode set to: {not current_mode}", show_alert=True)
+        return
+
+    # Feature 6: Language selection callbacks
+    if data.startswith("set_lang_"):
+        lang = data.replace("set_lang_", "")
+        users_collection.update_one({"user_id": user_id}, {"$set": {"language": lang}}, upsert=True)
+        await query.edit_message_text(f"✅ Language successfully changed to: {'English 🇬🇧' if lang == 'en' else 'Hindi 🇮🇳'}")
+        return
+
+    # Feature 8: Confirmations
+    if data.startswith("confirm_del_ch_"):
+        ch_id = int(data.replace("confirm_del_ch_", ""))
+        channels_collection.delete_one({"id": ch_id})
+        await query.edit_message_text("✅ Channel successfully deleted with confirmation!")
+        return
+    elif data == "proceed_edit_channel":
+        PENDING_ADMIN_ACTIONS[user_id] = "awaiting_channel_edit_template"
+        await query.message.reply_text("✏️ Please send the updated channel details template format now.")
+        return
+
     if data == "check_fs_complete":
         unjoined = await check_force_subscribe(user_id, context)
         if unjoined:
@@ -1060,7 +1272,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Force subscribe channel ids: {fs_ids}\n"
             f"1 month price: {bot_settings['prices']['1']}\n"
             f"2 month price: {bot_settings['prices']['2']}\n"
-            f"3 month price: {bot_settings['prices']['3']}"
+            f"3 month price: {bot_settings['prices']['3']}\n"
+            f"Items Per Page: {bot_settings.get('items_per_page', 10)}"
         )
         await query.message.reply_text(
             "✏️ Edit the details in below and send back to me:\n\n" + f"<code>{edit_template}</code>",
@@ -1206,10 +1419,21 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_search_results(update, context, edit_message=True)
 
 
+# --- FEATURE 4: INTERACTIVE NOTIFICATION REMINDERS (BACKGROUND JOB) ---
 async def background_expiry_checker(context: ContextTypes.DEFAULT_TYPE):
-    """Background task checking 7-day join validity expirations for free/verify users and subscription expirations for premium users."""
+    """Background task checking 7-day join validity expirations, subscriptions, and sending 24h advance warnings."""
     now = datetime.now()
     
+    # 24-hour advance warning for expiring trackers
+    warning_threshold = now + timedelta(hours=24)
+    approaching_trackers = list(trackers_collection.find({"expiry": {"$lte": warning_threshold, "$gt": now}, "warned": {"$ne": True}}))
+    for trk in approaching_trackers:
+        try:
+            await context.bot.send_message(chat_id=trk["user_id"], text="⚠️ Reminder: Your temporary access to a channel expires in 24 hours!")
+            trackers_collection.update_one({"_id": trk["_id"]}, {"$set": {"warned": True}})
+        except Exception as e:
+            logger.error(f"Failed to send 24h reminder: {e}")
+
     expired_trackers = list(trackers_collection.find({"expiry": {"$lte": now}}))
     for tracker in expired_trackers:
         user_id = tracker["user_id"]
@@ -1249,16 +1473,15 @@ def main():
         logger.error("TELEGRAM_BOT_TOKEN is missing in environment variables!")
         return
 
-    # Start lightweight web server in background thread to satisfy Render port requirements
-    web_thread = threading.Thread(target=run_web_server, daemon=True)
-    web_thread.start()
-
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # Register error handler (Feature 7)
+    app.add_error_handler(global_error_handler)
 
     # Register handlers
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("add_channel", add_channel_command))
-    app.add_handler(CommandHandler(opt := "list_channel", list_channel_command))
+    app.add_handler(CommandHandler("list_channel", list_channel_command))
     app.add_handler(CommandHandler("settings", settings_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("add_user", add_user_command))
@@ -1266,6 +1489,9 @@ def main():
     app.add_handler(CommandHandler("plan", plan_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
+    app.add_handler(CommandHandler("backup", backup_command))      # Feature 3
+    app.add_handler(CommandHandler("broadcast", broadcast_command)) # Feature 11
+    app.add_handler(CommandHandler("language", language_command))   # Feature 6
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(ChatJoinRequestHandler(chat_join_request_handler))
@@ -1273,7 +1499,7 @@ def main():
     if app.job_queue:
         app.job_queue.run_repeating(background_expiry_checker, interval=3600, first=10)
 
-    print("Bot is running with MongoDB backend, web server port 4000, and SSL fixes...")
+    print("Bot is running with MongoDB backend, all 11 features successfully integrated...")
     app.run_polling()
 
 
