@@ -21,6 +21,7 @@ from telegram.ext import (
 )
 from pymongo import MongoClient
 from thefuzz import fuzz, process
+import unicodedata
 
 # Load environment variables from .env file
 load_dotenv()
@@ -110,10 +111,12 @@ def update_settings(new_fields: dict):
 
 
 def normalize_text(text: str) -> str:
-    """Normalizes text by lowercasing and converting Unicode variants to standard tokens."""
+    """Normalizes text by lowercasing, stripping fancy unicode variants, and standardizing tokens."""
     if not text:
         return ""
-    return text.strip().lower()
+    nfkd_form = unicodedata.normalize('NFKD', text)
+    ascii_str = "".join([c for c in nfkd_form if not unicodedata.combining(c)])
+    return ascii_str.strip().lower()
 
 
 LOCALIZATION_STRINGS = {
@@ -178,7 +181,7 @@ async def global_error_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         bot_settings = get_settings()
         admins = bot_settings.get("admins", ADMIN_IDS)
-        error_msg = f"🚨 <b>Bot Error Alert</b>:\n<pre>{str(context.error)}</pre>"
+        error_msg = f"🚨 <b>Bot Error Alert</b>:\n<blockquote><pre>{str(context.error)}</pre></blockquote>"
         for admin_id in admins:
             await context.bot.send_message(chat_id=admin_id, text=error_msg, parse_mode="HTML")
     except Exception as e:
@@ -240,7 +243,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             blocked_count += 1
 
-    await status_msg.edit_text(f"✅ Broadcast complete!\n\n• Success: {success_count}\n• Blocked/Failed: {blocked_count}")
+    await status_msg.edit_text(f"✅ Broadcast complete!\n\n<blockquote>• Success: {success_count}\n• Blocked/Failed: {blocked_count}</blockquote>")
 
 
 async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -278,7 +281,7 @@ async def add_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         "Category:\n"
         "More info:"
     )
-    await update.message.reply_text("📥 <b>Send channel details template:</b>\n\n" + f"<code>{template}</code>", parse_mode="HTML")
+    await update.message.reply_text("📥 <b>Send channel details template:</b>\n\n" + f"<blockquote><code>{template}</code></blockquote>", parse_mode="HTML")
 
 
 async def add_link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -296,7 +299,7 @@ async def add_link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "More:\n"
         "Link:"
     )
-    await update.message.reply_text("🔗 <b>Send distribution link template:</b>\n\n" + f"<code>{template}</code>", parse_mode="HTML")
+    await update.message.reply_text("🔗 <b>Send distribution link template:</b>\n\n" + f"<blockquote><code>{template}</code></blockquote>", parse_mode="HTML")
 
 
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -312,6 +315,7 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     settings_text = (
         "⚙️ <b>𝐂𝐔𝐑𝐑𝐄𝐍𝐓 𝐒𝐄𝐓𝐓𝐈𝐍𝐆𝐒</b>\n\n"
+        "<blockquote>"
         f"<b>Admins:</b> {admins_str}\n"
         f"<b>More channel link:</b> {bot_settings['more_channel_link']}\n"
         f"<b>Video tutorial link:</b> {bot_settings.get('video_tutorial_link', DEFAULT_VIDEO_TUTORIAL_URL)}\n"
@@ -321,6 +325,7 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>QR/Pay Image URL:</b> {bot_settings.get('qr_image_url', 'Default')}\n"
         f"<b>Verify Banner URL:</b> {bot_settings.get('verify_banner_url', 'Default')}\n"
         f"<b>Maintenance Mode:</b> {bot_settings.get('maintenance_mode', False)}"
+        "</blockquote>"
     )
 
     keyboard = [
@@ -355,11 +360,13 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     stats_text = (
         "📊 <b>𝐘𝐎𝐔𝐑 𝐀𝐂𝐂𝐎𝐔𝐍𝐓 𝐒𝐓𝐀𝐓𝐒</b>\n\n"
+        "<blockquote>"
         f"• <b>Name:</b> {name}\n"
         f"• <b>ID:</b> <code>{user_id}</code>\n"
         f"• <b>Status:</b> {status_str}\n"
         f"• <b>Expiry:</b> {expiry_str}\n"
-        f"• <b>Joined Channels:</b> <blockquote>{joined_text}</blockquote>"
+        f"• <b>Joined Channels:</b> {joined_text}"
+        "</blockquote>"
     )
     await update.message.reply_text(stats_text, parse_mode="HTML")
 
@@ -406,8 +413,8 @@ async def render_channel_list_page(update: Update, context: ContextTypes.DEFAULT
     lines = ["📋 <b>𝐂𝐇𝐀𝐍𝐍𝐄𝐋𝐒 𝐋𝐈𝐒𝐓:</b>\n"]
     for idx, ch in enumerate(page_items, start=start_idx + 1):
         lines.append(
-            f"{idx}. <b>{ch['name']}</b> (ID: <code>{ch.get('id')}</code>)\n"
-            f"   Type: {ch.get('type')} | Cat: {ch.get('category')}\n"
+            f"<blockquote>{idx}. <b>{ch['name']}</b> (ID: <code>{ch.get('id')}</code>)\n"
+            f"   Type: {ch.get('type')} | Cat: {ch.get('category')}</blockquote>"
         )
     
     if not page_items:
@@ -528,8 +535,8 @@ async def render_user_list_page(update: Update, context: ContextTypes.DEFAULT_TY
         expiry_str = expiry_val.strftime('%Y-%m-%d %H:%M') if expiry_val else "None"
         
         lines.append(
-            f"{idx}. <b>{name}</b> (<code>{uid}</code>)\n"
-            f"   Expiry: <b>{expiry_str}</b>\n"
+            f"<blockquote>{idx}. <b>{name}</b> (<code>{uid}</code>)\n"
+            f"   Expiry: <b>{expiry_str}</b></blockquote>"
         )
 
     if not page_items:
@@ -877,10 +884,12 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     plan_text = (
         "💎 <b>𝐏𝐑𝐄𝐌𝐈𝐔𝐌 𝐒𝐔𝐁𝐒𝐂𝐑𝐈𝐏𝐓𝐈𝐎𝐍 𝐏𝐋𝐀𝐍𝐒</b>\n\n"
+        "<blockquote>"
         f"• <b>₹{p1} INR</b> for 1 Month\n"
         f"• <b>₹{p2} INR</b> for 2 Months\n"
         f"• <b>₹{p3} INR</b> for 3 Months\n\n"
         "<b>UPI ID:</b> <code>fshhs@hshs</code>"
+        "</blockquote>"
     )
     keyboard = [
         [InlineKeyboardButton("💳 Pay Now", url="https://rb.gy/81kgkx")],
@@ -898,16 +907,19 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_help = (
         "📖 <b>𝐔𝐒𝐄𝐑 𝐂𝐎𝐌𝐌𝐀𝐍𝐃𝐒:</b>\n"
+        "<blockquote>"
         "• /start - Start bot\n"
         "• /plan - View subscription plans\n"
         "• /stats - Account status\n"
         "• /language - Toggle language\n"
         "• /help - Help guide"
+        "</blockquote>"
     )
 
     if is_admin:
         admin_help = (
             "\n\n⚙️ <b>𝐀𝐃𝐌𝐈𝐍 𝐂𝐎𝐌𝐌𝐀𝐍𝐃𝐒:</b>\n"
+            "<blockquote>"
             "• /add_channel - Add Telegram channel\n"
             "• /add_link - Add distribution link\n"
             "• /list_channel - Manage channels\n"
@@ -917,6 +929,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• /add_user - Grant user validity\n"
             "• /list_user - List users with channel metrics\n"
             "• /cancel - Cancel any current process"
+            "</blockquote>"
         )
         await update.message.reply_text(user_help + admin_help, parse_mode="HTML")
     else:
@@ -983,8 +996,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
                     verify_text = (
                         "🛡️ <b>𝚅𝚎𝚛𝚒𝚏𝚒𝚌𝚊𝚝𝚒𝚘𝚗 𝚁𝚎𝚚𝚞𝚒𝚛𝚎𝚍</b>\n\n"
-                        "Please complete the shortener verification link below to unlock access, or buy premium to bypass verification completely!\n\n"
-                        "💎 <i>Buy Premium via /plan to skip verification.</i>"
+                        "<blockquote>Please complete the shortener verification link below to unlock access, or buy premium to bypass verification completely!\n\n"
+                        "💎 <i>Buy Premium via /plan to skip verification.</i></blockquote>"
                     )
                     
                     tutorial_link = bot_settings.get("video_tutorial_link", DEFAULT_VIDEO_TUTORIAL_URL)
@@ -1012,9 +1025,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             message_text = (
                 "📂 <b>𝙲𝚑𝚊𝚗𝚗𝚎𝚕 𝙳𝚎𝚝𝚊𝚒𝚕𝚜</b>\n\n"
+                "<blockquote>"
                 f"<b>𝙽𝚊𝚖𝚎:</b> {matched_item['name']}\n"
                 f"<b>𝚃𝚢𝚙𝚎:</b> {c_type.capitalize()}\n"
-                f"<b>𝙲𝚊𝚝𝚎𝚐𝚘𝚛𝚢:</b> {matched_item['category']}\n"
+                f"<b>𝙲𝚊𝚝𝚎𝚐𝚘𝚛𝚢:</b> {matched_item['category']}"
+                "</blockquote>"
             )
             keyboard = [[InlineKeyboardButton("𝙹𝚘𝚒𝚗 𝙲𝚑𝚊𝚗𝚗𝚎𝚕", url=target_invite_link)]]
             await update.message.reply_text(message_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -1042,19 +1057,17 @@ async def handle_search_message_logic(update: Update, context: ContextTypes.DEFA
     all_channels = list(channels_collection.find({}))
     norm_query = normalize_text(query)
 
-    # 1. Try exact string match first
     found_items = [ch for ch in all_channels if norm_query in normalize_text(ch["name"]) or norm_query in normalize_text(ch.get("category", ""))]
 
     suggestions = []
     if not found_items:
-        # 2. Fallback to word-by-word search / fuzzy matching
         channel_names = [ch["name"] for ch in all_channels]
-        fuzzy_results = process.extract(query, channel_names, limit=15, scorer=fuzz.token_sort_ratio)
-        matched_names = {res[0] for res in fuzzy_results if res[1] >= 40}
+        fuzzy_results = process.extract(norm_query, [normalize_text(n) for n in channel_names], limit=15, scorer=fuzz.token_sort_ratio)
+        matched_indices = {res[2] for res in fuzzy_results if res[1] >= 40}
         
-        found_items = [ch for ch in all_channels if ch["name"] in matched_names]
+        found_items = [all_channels[i] for i in matched_indices]
         if not found_items:
-            suggestions = [res[0] for res in fuzzy_results[:3] if res[1] >= 30]
+            suggestions = [channel_names[res[2]] for res in fuzzy_results[:3] if res[1] >= 30]
 
     context.user_data["search_query"] = query
     context.user_data["found_items"] = found_items
@@ -1069,18 +1082,19 @@ async def handle_search_message_logic(update: Update, context: ContextTypes.DEFA
 async def send_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message: bool = False):
     query = context.user_data.get("search_query", "")
     all_channels = list(channels_collection.find({}))
+    total_items = len(all_channels)
     found_items = context.user_data.get("found_items", all_channels)
+    found_count = len(found_items)
     suggestions = context.user_data.get("search_suggestions", [])
     
     type_filter = context.user_data.get("active_type_filter")
     cat_filter = context.user_data.get("active_cat_filter")
 
-    # Apply Filters if active
     filtered_items = found_items
     if type_filter:
         filtered_items = [item for item in filtered_items if item.get("type", "").lower() == type_filter.lower()]
     if cat_filter:
-        filtered_items = [item for item in filtered_items if item.get("category", "").lower() == cat_filter.lower()]
+        filtered_items = [item for item in filtered_items if normalize_text(item.get("category", "")) == normalize_text(cat_filter)]
 
     page = context.user_data.get("current_page", 0)
     bot_settings = get_settings()
@@ -1094,39 +1108,53 @@ async def send_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE
     current_page_items = filtered_items[start_idx:end_idx]
 
     text_lines = [
-        "📊 <b>𝐒𝐄𝐀𝐑𝐂𝐇 𝐑𝐄𝐒𝐔𝐋𝐓𝐒</b>",
-        f"▪ 𝐐𝐮𝐞𝐫𝐲: &quot;{query}&quot;"
+        "📊 <b>𝐒𝐄𝐀𝐑𝐂𝐇 𝐀𝐍𝐀𝐋𝐘𝐓𝐈𝐂𝐒</b>",
+        "──────────────────────────",
+        "<blockquote>"
+        f"▪ 𝐓𝐨𝐭𝐚𝐥 𝐈𝐭𝐞𝐦𝐬         : {total_items:,}\n"
+        f"▪ 𝐌𝐚𝐭𝐜𝐡𝐞𝐬 𝐅𝐨𝐮𝐧𝐝  : {found_count:,}\n"
+        f"▪ 𝐐𝐮𝐞𝐫𝐲 𝐒𝐭𝐫𝐢𝐧𝐠      : &quot;{query}&quot;\n"
+        f"▪ 𝐍𝐚𝐯𝐢𝐠𝐚𝐭𝐢𝐨𝐧          : 𝐏𝐚𝐠𝐞 {page + 1} of {max_pages + 1 if max_pages >= 0 else 1}"
+        "</blockquote>",
+        "──────────────────────────",
+        "📌 <b>𝐌𝐀𝐓𝐂𝐇𝐈𝐍𝐆 𝐑𝐄𝐂𝐎𝐑𝐃𝐒:</b>",
     ]
-    if type_filter:
-        text_lines.append(f"▪ 𝐓𝐲𝐩𝐞 𝐅𝐢𝐥𝐭𝐞𝐫: {type_filter.capitalize()}")
-    if cat_filter:
-        text_lines.append(f"▪ 𝐂𝐚𝐭𝐞𝐠𝐨𝐫𝐲 𝐅𝐢𝐥𝐭𝐞𝐫: {cat_filter}")
 
-    text_lines.append(f"▪ 𝐏𝐚𝐠𝐞: {page + 1} of {max_pages + 1 if max_pages >= 0 else 1}\n")
-    
-    if current_page_items:
-        text_lines.append("📌 <b>𝐌𝐀𝐓𝐂𝐇𝐈𝐍𝐆 𝐑𝐄𝐂𝐎𝐑𝐃𝐒:</b>")
-        for idx, item in enumerate(current_page_items, start=start_idx + 1):
-            dist_link = item.get("link", "#")
-            text_lines.append(f"<b>{idx}.</b> <a href='{dist_link}'>{item['name']}</a> [{item['type'].upper()}] - 📂 {item.get('category', 'General')}")
-    else:
-        text_lines.append("❌ <i>No matching records found for your query.</i>")
+    if not current_page_items:
+        text_lines.append("<i>No items found matching your filter criteria.</i>")
         if suggestions:
             text_lines.append("\n💡 <b>Did you mean:</b>")
             for sug in suggestions:
                 text_lines.append(f"• <code>{sug}</code>")
+    else:
+        for idx, item in enumerate(current_page_items, start=start_idx + 1):
+            main_link = item.get("link", "#")
+            more_info_val = item.get("more_info", "")
+            
+            if more_info_val and more_info_val.isdigit():
+                base_more = bot_settings.get("more_channel_link", "https://t.me/")
+                clean_base = base_more.rstrip("/")
+                more_link = f"{clean_base}/{more_info_val}"
+            elif more_info_val and more_info_val.startswith("http"):
+                more_link = more_info_val
+            else:
+                more_link = bot_settings.get("more_channel_link", "https://t.me/")
+
+            text_lines.append(
+                f"<blockquote>{idx}. <a href=\"{main_link}\">{item['name']}</a> [{item['type'].upper()}]\n"
+                f"   /n<a href=\"{more_link}\">More Info</a></blockquote>"
+            )
 
     response_text = "\n".join(text_lines)
 
-    # Dynamic Buttons including Category & Type filters
     keyboard = [
         [
-            InlineKeyboardButton("Free", callback_data="filter_type_free"),
-            InlineKeyboardButton("Verify", callback_data="filter_type_verify"),
-            InlineKeyboardButton("Premium", callback_data="filter_type_premium"),
+            InlineKeyboardButton("🟢 Free", callback_data="filter_type_free"),
+            InlineKeyboardButton("🟡 Verify", callback_data="filter_type_verify"),
+            InlineKeyboardButton("🟣 Premium", callback_data="filter_type_premium"),
         ],
         [
-            InlineKeyboardButton("🏷️ Filter by Category", callback_data="prompt_category_filter"),
+            InlineKeyboardButton("🏷️ Category Filter", callback_data="prompt_category_filter"),
             InlineKeyboardButton("🔄 Reset Filters", callback_data="filter_reset")
         ]
     ]
@@ -1193,7 +1221,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Link: {ch_rec.get('link', '')}\n"
             f"More Info: {ch_rec.get('more_info', '')}"
         )
-        await query.message.reply_text("✏️ <b>Edit Channel Data Template:</b>\n\n" + f"<code>{edit_template}</code>", parse_mode="HTML")
+        await query.message.reply_text("✏️ <b>Edit Channel Data Template:</b>\n\n" + f"<blockquote><code>{edit_template}</code></blockquote>", parse_mode="HTML")
         return
 
     if data.startswith("edit_usr_data_"):
@@ -1215,7 +1243,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Name: {usr_rec.get('name', 'User')}\n"
             f"Expiry: {expiry_str}"
         )
-        await query.message.reply_text("✏️ <b>Edit User Data Template:</b>\n\n" + f"<code>{edit_template}</code>", parse_mode="HTML")
+        await query.message.reply_text("✏️ <b>Edit User Data Template:</b>\n\n" + f"<blockquote><code>{edit_template}</code></blockquote>", parse_mode="HTML")
         return
 
     if data == "confirm_no":
@@ -1238,7 +1266,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"2 month price: {bot_settings['prices']['2']}\n"
             f"3 month price: {bot_settings['prices']['3']}"
         )
-        await query.message.reply_text("✏️ Edit settings and send back:\n\n" + f"<code>{edit_template}</code>", parse_mode="HTML")
+        await query.message.reply_text("✏️ Edit settings and send back:\n\n" + f"<blockquote><code>{edit_template}</code></blockquote>", parse_mode="HTML")
         return
 
     if data.startswith("verify_check_"):
@@ -1265,14 +1293,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"<b>𝙽𝚊𝚖𝚎:</b> {matched_item['name']}\n"
             f"<b>𝚃𝚢𝚙𝚎:</b> {matched_item['type'].capitalize()}\n"
             f"<b>𝙲𝚊𝚝𝚎𝚐𝚘𝚛𝚢:</b> {matched_item['category']}\n"
-            "<b>Access Duration:</b> 7 Days\n"
+            "🕒 <b>Access Duration:</b> 7 Days"
             "</blockquote>"
         )
         keyboard = [[InlineKeyboardButton("𝙹𝚘𝚒𝚗 𝙲𝚑𝚊𝚗𝚗𝚎𝚕", url=target_invite_link)]]
         await query.edit_message_text(text=message_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # Filter Action Handlers
     if data.startswith("filter_type_"):
         context.user_data["active_type_filter"] = data.replace("filter_type_", "")
         context.user_data["current_page"] = 0
@@ -1281,9 +1308,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "prompt_category_filter":
         all_channels = list(channels_collection.find({}))
-        categories = list(set(ch.get("category", "General") for ch in all_channels if ch.get("category")))
+        categories = sorted(list(set(ch.get("category", "General") for ch in all_channels if ch.get("category"))))
         
-        cat_keyboard = []
+        cat_keyboard = [[InlineKeyboardButton("📁 All Categories", callback_data="set_cat_all")]]
         for cat in categories:
             cat_keyboard.append([InlineKeyboardButton(f"📁 {cat}", callback_data=f"set_cat_{cat}")])
         cat_keyboard.append([InlineKeyboardButton("🔙 Back to Results", callback_data="back_to_search_results")])
@@ -1292,7 +1319,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("set_cat_"):
-        context.user_data["active_cat_filter"] = data.replace("set_cat_", "")
+        cat_val = data.replace("set_cat_", "")
+        if cat_val == "all":
+            context.user_data["active_cat_filter"] = None
+        else:
+            context.user_data["active_cat_filter"] = cat_val
         context.user_data["current_page"] = 0
         await send_search_results(update, context, edit_message=True)
         return
@@ -1334,7 +1365,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("🔍 Send user ID/Name filter:")
 
 
-# --- RENDER WEB PORT BINDING SERVER ---
 web_app = Flask(__name__)
 
 @web_app.route('/')
@@ -1383,3 +1413,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
