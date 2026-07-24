@@ -4,6 +4,8 @@ import requests
 import json
 import io
 from datetime import datetime, timedelta
+from threading import Thread
+from flask import Flask
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ChatJoinRequest
 from telegram.ext import (
@@ -32,15 +34,10 @@ BOT_USERNAME = os.getenv("BOT_USERNAME", "Dps_storiesbot")
 DEFAULT_ADMIN_ID = int(os.getenv("DEFAULT_ADMIN_ID", "8323137024"))
 ADMIN_IDS = [int(admin_id.strip()) for admin_id in os.getenv("ADMIN_IDS", "8323137024").split(",")]
 AROLINKS_API_TOKEN = os.getenv("AROLINKS_API_TOKEN", "9dd2d9a7855be5078a54d5a9a2493fb195162b5e")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
-# Media Links Configuration
-START_MEDIA_URL = os.getenv("START_MEDIA_URL", "https://ibb.co/ynTDh3tn")
-QR_IMAGE_URL = os.getenv("QR_IMAGE_URL", "https://files.catbox.moe/68r9do.jpg")
-VERIFY_BANNER_URL = os.getenv("VERIFY_BANNER_URL", "https://files.catbox.moe/rr3cn8.jpg")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
 # MongoDB Configuration
-MONGO_URI = os.getenv("MONGO_URI")
+MONGO_URI = os.getenv("MONGO_URI", "")
 client = MongoClient(MONGO_URI)
 db = client["telegram_bot_db"]
 
@@ -61,14 +58,17 @@ if settings_collection.count_documents({"_id": "bot_settings"}) == 0:
             "2": "95",
             "3": "140"
         },
+        "start_media_url": "https://ibb.co/ynTDh3tn",
+        "qr_image_url": "https://files.catbox.moe/68r9do.jpg",
+        "verify_banner_url": "https://files.catbox.moe/rr3cn8.jpg",
         "maintenance_mode": False,
         "maintenance_message": "🛠️ Bot is currently under maintenance. Please check back later!",
         "items_per_page": 10
     })
 
-PENDING_ADMIN_ACTIONS = {}  # Format: { user_id: "awaiting_channel_details" }
-VERIFICATION_STATE = {}   # Format: { (user_id, token): True/False }
-RATE_LIMIT_CACHE = {}     # Feature 1 & 10: In-memory rate limiting tracker
+PENDING_ADMIN_ACTIONS = {}  
+VERIFICATION_STATE = {}   
+RATE_LIMIT_CACHE = {}     
 
 
 def get_settings():
@@ -80,6 +80,9 @@ def get_settings():
             "more_channel_link": "https://t.me/your_more_channel/",
             "force_subscribe_ids": [],
             "prices": {"1": "49", "2": "95", "3": "140"},
+            "start_media_url": "https://ibb.co/ynTDh3tn",
+            "qr_image_url": "https://files.catbox.moe/68r9do.jpg",
+            "verify_banner_url": "https://files.catbox.moe/rr3cn8.jpg",
             "maintenance_mode": False,
             "maintenance_message": "🛠️ Bot is currently under maintenance. Please check back later!",
             "items_per_page": 10
@@ -92,37 +95,13 @@ def update_settings(new_fields: dict):
     settings_collection.update_one({"_id": "bot_settings"}, {"$set": new_fields})
 
 
-# Helper to normalize/clean strings for font-agnostic search
 def normalize_text(text: str) -> str:
     """Normalizes text by lowercasing and converting Unicode variants to standard tokens."""
     if not text:
         return ""
     return text.strip().lower()
 
-# Pre-populate sample channels if database is empty
-if channels_collection.count_documents({}) == 0:
-    categories = ["Ebooks", "Movies", "Courses", "Tools", "Music"]
-    types_list = ["free", "verify", "premium"]
-    for i in range(1, 11):
-        category = categories[i % len(categories)]
-        c_type = types_list[i % len(types_list)]
-        item_name = f"Channel Item {i} - {category} Guide"
-        start_token = f"DPS_sty9{i}52yfsy1"
-        start_link = f"https://t.me/{BOT_USERNAME}?start={start_token}"
-        channels_collection.insert_one(
-            {
-                "id": -1001000000000 + i,
-                "name": item_name,
-                "category": category,
-                "type": c_type,
-                "link": start_link,
-                "token": start_token,
-                "more_info": str(i * 10)
-            }
-        )
 
-
-# --- FEATURE 6: LOCALIZATION STRINGS ---
 LOCALIZATION_STRINGS = {
     "en": {
         "welcome": "👋 Welcome!\nSend me any keyword or phrase to search our database.",
@@ -137,28 +116,24 @@ LOCALIZATION_STRINGS = {
 }
 
 def get_user_language(user_id: int) -> str:
-    """Fetches user's preferred language, defaults to English."""
     user = users_collection.find_one({"user_id": user_id})
     if user and "language" in user:
         return user["language"]
     return "en"
 
 def tr(user_id: int, key: str) -> str:
-    """Translates key based on user's selected language."""
     lang = get_user_language(user_id)
     return LOCALIZATION_STRINGS.get(lang, LOCALIZATION_STRINGS["en"]).get(key, LOCALIZATION_STRINGS["en"].get(key, key))
 
 
-# --- FEATURE 1 & 10: RATE LIMITING & ANTI-SPAM MIDDLEWARE ---
 async def rate_limit_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Throttles spam interactions and protects against command abuse."""
     user = update.effective_user
     if not user:
         return True
     
     bot_settings = get_settings()
     if user.id in bot_settings.get("admins", []) or user.id in ADMIN_IDS:
-        return True  # Bypass for admins
+        return True
 
     now = datetime.now()
     last_interaction = RATE_LIMIT_CACHE.get(user.id)
@@ -172,9 +147,7 @@ async def rate_limit_middleware(update: Update, context: ContextTypes.DEFAULT_TY
     return True
 
 
-# --- FEATURE 2: MAINTENANCE MODE TOGGLE & CHECKER ---
 async def maintenance_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Checks if maintenance mode is active."""
     bot_settings = get_settings()
     if bot_settings.get("maintenance_mode", False):
         user_id = update.effective_user.id if update.effective_user else 0
@@ -186,9 +159,7 @@ async def maintenance_check(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return False
 
 
-# --- FEATURE 7: ENHANCED LOGGING & ERROR ALERTS ---
 async def global_error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Global error handler catching unexpected exceptions and notifying log channel/admins."""
     logger.error(msg="Exception while handling an update:", exc_info=context.error)
     try:
         bot_settings = get_settings()
@@ -200,9 +171,7 @@ async def global_error_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.error(f"Failed to dispatch error alert: {e}")
 
 
-# --- FEATURE 3: AUTOMATED BACKUP & RESTORE UTILITY ---
 async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Exports all MongoDB collections into a compressed JSON backup file."""
     user_id = update.effective_user.id
     bot_settings = get_settings()
     if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
@@ -225,31 +194,7 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Backup failed: {e}")
 
 
-# --- FEATURE 8: INTERACTIVE REMOVAL CONFIRMATION ---
-PENDING_CONFIRMATIONS = {}
-
-async def confirm_action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles confirmation inline buttons for critical operations."""
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    user_id = query.from_user.id
-
-    if data.startswith("confirm_yes_"):
-        action_key = data.replace("confirm_yes_", "")
-        if action_key in PENDING_CONFIRMATIONS:
-            action_data = PENDING_CONFIRMATIONS[action_key]
-            if action_data["type"] == "delete_channel":
-                channels_collection.delete_one({"id": action_data["channel_id"]})
-                await query.edit_message_text("✅ Channel successfully removed from database!")
-            del PENDING_CONFIRMATIONS[action_key]
-    elif data == "confirm_no":
-        await query.edit_message_text("❌ Action cancelled.")
-
-
-# --- FEATURE 11: BROADCAST MESSAGING FUNCTION ---
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin command to broadcast text, photo, or video to all registered users."""
     user_id = update.effective_user.id
     bot_settings = get_settings()
     if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
@@ -258,12 +203,11 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     reply_to = update.message.reply_to_message
     if not reply_to:
-        await update.message.reply_text("❌ Please reply to the message (text, photo, or video) you want to broadcast using /broadcast.")
+        await update.message.reply_text("❌ Please reply to the message using /broadcast.")
         return
 
     users = list(users_collection.find({}))
     success_count, blocked_count = 0, 0
-
     status_msg = await update.message.reply_text(f"🚀 Broadcasting to {len(users)} users...")
 
     for usr in users:
@@ -280,26 +224,20 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=target_uid, text=reply_to.text, parse_mode="HTML", reply_markup=reply_markup)
             success_count += 1
         except Exception as e:
-            logger.warning(f"Failed to send broadcast to {target_uid}: {e}")
             blocked_count += 1
 
     await status_msg.edit_text(f"✅ Broadcast complete!\n\n• Success: {success_count}\n• Blocked/Failed: {blocked_count}")
 
 
-# --- FEATURE 6: LANGUAGE TOGGLE COMMAND ---
 async def language_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lets users toggle their preferred language dynamically."""
     keyboard = [
         [InlineKeyboardButton("English 🇬🇧", callback_data="set_lang_en"),
          InlineKeyboardButton("Hindi 🇮🇳", callback_data="set_lang_hi")]
     ]
-    await update.message.reply_text("🌐 <b>Select your preferred language / अपनी भाषा चुनें:</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text("🌐 <b>Select your preferred language:</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
-
-# --- CANCEL COMMAND ---
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancels any ongoing admin action/state."""
     user_id = update.effective_user.id
     if user_id in PENDING_ADMIN_ACTIONS:
         del PENDING_ADMIN_ACTIONS[user_id]
@@ -308,14 +246,13 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Current operation cancelled successfully.")
 
 
-# --- ADMIN & USER COMMANDS ---
+# --- ADMIN COMMANDS ---
 
 async def add_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Triggers the prompt template for adding a new channel."""
     user_id = update.effective_user.id
     bot_settings = get_settings()
     if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
-        await update.message.reply_text("⛔ You are not authorized to use this command.")
+        await update.message.reply_text("⛔ You are not authorized.")
         return
 
     PENDING_ADMIN_ACTIONS[user_id] = "awaiting_channel_details"
@@ -325,11 +262,28 @@ async def add_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         "Category:\n"
         "More info:"
     )
-    await update.message.reply_text(template)
+    await update.message.reply_text("📥 <b>Send channel details template:</b>\n\n" + f"<code>{template}</code>", parse_mode="HTML")
+
+
+async def add_link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    bot_settings = get_settings()
+    if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ You are not authorized.")
+        return
+
+    PENDING_ADMIN_ACTIONS[user_id] = "awaiting_link_details"
+    template = (
+        "Channel Name:\n"
+        "Types:\n"
+        "Category:\n"
+        "More:\n"
+        "Link:"
+    )
+    await update.message.reply_text("🔗 <b>Send distribution link template:</b>\n\n" + f"<code>{template}</code>", parse_mode="HTML")
 
 
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Displays current bot settings and an edit button for admins."""
     user_id = update.effective_user.id
     bot_settings = get_settings()
     if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
@@ -337,32 +291,29 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     listed_admins = [str(adm) for adm in bot_settings["admins"] if adm != DEFAULT_ADMIN_ID]
-    admins_str = ", ".join(listed_admins) if listed_admins else "None (Using Default)"
+    admins_str = ", ".join(listed_admins) if listed_admins else "None"
     fs_ids = ", ".join(str(i) for i in bot_settings["force_subscribe_ids"]) if bot_settings["force_subscribe_ids"] else "None"
 
     settings_text = (
         "⚙️ <b>𝐂𝐔𝐑𝐑𝐄𝐍𝐓 𝐒𝐄𝐓𝐓𝐈𝐍𝐆𝐒</b>\n\n"
-        f"<b>Admis:</b> {admins_str}\n"
+        f"<b>Admins:</b> {admins_str}\n"
         f"<b>More channel link:</b> {bot_settings['more_channel_link']}\n"
-        f"<b>Force subscribe channel ids:</b> {fs_ids}\n"
-        f"<b>1 month price:</b> {bot_settings['prices']['1']}\n"
-        f"<b>2 month price:</b> {bot_settings['prices']['2']}\n"
-        f"<b>3 month price:</b> {bot_settings['prices']['3']}\n"
-        f"<b>Maintenance Mode:</b> {bot_settings.get('maintenance_mode', False)}\n"
-        f"<b>Items Per Page:</b> {bot_settings.get('items_per_page', 10)}"
+        f"<b>Force subscribe ids:</b> {fs_ids}\n"
+        f"<b>Prices:</b> {bot_settings['prices']}\n"
+        f"<b>Start Media URL:</b> {bot_settings.get('start_media_url', 'Default')}\n"
+        f"<b>QR/Pay Image URL:</b> {bot_settings.get('qr_image_url', 'Default')}\n"
+        f"<b>Verify Banner URL:</b> {bot_settings.get('verify_banner_url', 'Default')}\n"
+        f"<b>Maintenance Mode:</b> {bot_settings.get('maintenance_mode', False)}"
     )
 
     keyboard = [
         [InlineKeyboardButton("✏️ Edit Settings", callback_data="edit_settings_prompt")],
         [InlineKeyboardButton("🛠️ Toggle Maintenance", callback_data="toggle_maintenance")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_text(settings_text, parse_mode="HTML", reply_markup=reply_markup)
+    await update.message.reply_text(settings_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
 
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shows user status, name, ID, expiry, and joined channel list from MongoDB."""
     user = update.effective_user
     user_id = user.id
     name = user.full_name or "Unknown User"
@@ -393,38 +344,37 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• <b>Expiry:</b> {expiry_str}\n"
         f"• <b>Joined Channels:</b> <blockquote>{joined_text}</blockquote>"
     )
-
     await update.message.reply_text(stats_text, parse_mode="HTML")
 
 
 async def list_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lists all channels with serial numbers for editing."""
     user_id = update.effective_user.id
     bot_settings = get_settings()
     if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
         await update.message.reply_text("⛔ You are not authorized.")
         return
 
-    channels_count = channels_collection.count_documents({})
-    if channels_count == 0:
-        await update.message.reply_text("📂 No channels found in the database.")
+    if channels_collection.count_documents({}) == 0:
+        await update.message.reply_text("📂 No channels found in database.")
         return
 
     context.user_data["channel_list_page"] = 0
+    context.user_data["channel_list_search"] = ""
     await render_channel_list_page(update, context, edit_message=False)
 
 
 async def render_channel_list_page(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message: bool = False):
-    """Renders paginated channel list with search option."""
     page = context.user_data.get("channel_list_page", 0)
     search_filter = context.user_data.get("channel_list_search", "")
 
     all_channels = list(channels_collection.find({}))
     if search_filter:
         sf = normalize_text(search_filter)
-        items = [ch for ch in all_channels if sf in normalize_text(ch['name']) or sf in str(ch['id'])]
+        items = [ch for ch in all_channels if sf in normalize_text(ch['name']) or sf in str(ch.get('id', ''))]
     else:
         items = all_channels
+
+    context.user_data["current_rendered_channels"] = items
 
     bot_settings = get_settings()
     ITEMS_PER_PAGE = bot_settings.get("items_per_page", 5)
@@ -443,12 +393,13 @@ async def render_channel_list_page(update: Update, context: ContextTypes.DEFAULT
             more_link_base += "/"
         more_info_val = ch.get("more_info", "")
         more_info_hyperlink = f"{more_link_base}{more_info_val}" if more_info_val else more_link_base
+        dist_link = ch.get("link", "#")
 
         lines.append(
             f"{idx}. <b>{ch['name']}</b>\n"
-            f"<blockquote>   ID: <code>{ch['id']}</code> \n"
-            f"Type: {ch['type']} \n"
+            f"<blockquote>   Type: {ch['type']} \n"
             f"Cat: {ch['category']} \n"
+            f"Link: <a href='{dist_link}'>Open Link</a> \n"
             f"More Info: <a href='{more_info_hyperlink}'>Link</a></blockquote>"
         )
     
@@ -456,7 +407,7 @@ async def render_channel_list_page(update: Update, context: ContextTypes.DEFAULT
         lines.append("<i>No channels match your search filter.</i>")
 
     lines.append(f"\nPage {page + 1} of {max_pages + 1 if max_pages >= 0 else 1}")
-    lines.append("<i>Send a serial number to edit channel details, or use search.</i>")
+    lines.append("<i>Send a serial number to edit/delete channel details.</i>")
 
     keyboard = []
     nav_row = []
@@ -483,7 +434,6 @@ async def render_channel_list_page(update: Update, context: ContextTypes.DEFAULT
 
 
 async def add_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Adds or updates premium validity for a user in MongoDB. Usage: /add_user <user_id> <validity>"""
     user_id = update.effective_user.id
     bot_settings = get_settings()
     if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
@@ -492,13 +442,12 @@ async def add_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     args = context.args
     if len(args) < 2:
-        await update.message.reply_text("❌ Usage: <code>/add_user {user_id} {validity}</code>\nExample: <code>/add_user 123456789 7d</code> or <code>30m</code>", parse_mode="HTML")
+        await update.message.reply_text("❌ Usage: <code>/add_user {user_id} {validity}</code>", parse_mode="HTML")
         return
 
     try:
         target_user_id = int(args[0])
         validity_str = args[1].lower()
-        
         amount = int(validity_str[:-1])
         unit = validity_str[-1]
 
@@ -509,8 +458,6 @@ async def add_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             delta = timedelta(days=amount)
         elif unit == 'h':
             delta = timedelta(hours=amount)
-        else:
-            raise ValueError("Invalid unit. Use 'm' for minutes, 'd' for days, 'h' for hours.")
 
         now = datetime.now()
         existing_user = users_collection.find_one({"user_id": target_user_id})
@@ -519,20 +466,17 @@ async def add_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             current_expiry = now
 
         new_expiry = current_expiry + delta
-
         users_collection.update_one(
             {"user_id": target_user_id},
-            {"$set": {"expiry": new_expiry}, "$setOnInsert": {"joined_channels": []}},
+            {"$set": {"expiry": new_expiry}, "$setOnInsert": {"joined_channels": [], "name": "User"}},
             upsert=True
         )
-
-        await update.message.reply_text(f"✅ User <code>{target_user_id}</code> given premium validity until <b>{new_expiry.strftime('%Y-%m-%d %H:%M')}</b>.", parse_mode="HTML")
+        await update.message.reply_text(f"✅ User <code>{target_user_id}</code> given validity until <b>{new_expiry.strftime('%Y-%m-%d %H:%M')}</b>.", parse_mode="HTML")
     except Exception as e:
-        await update.message.reply_text(f"❌ Failed to add user validity: {e}")
+        await update.message.reply_text(f"❌ Failed: {e}")
 
 
 async def list_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lists users ordered by nearest expiry date from MongoDB."""
     user_id = update.effective_user.id
     bot_settings = get_settings()
     if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
@@ -544,22 +488,20 @@ async def list_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     context.user_data["user_list_page"] = 0
+    context.user_data["user_list_search"] = ""
     await render_user_list_page(update, context, edit_message=False)
 
 
 async def render_user_list_page(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message: bool = False):
-    """Renders paginated list of users sorted by nearest expiration from MongoDB."""
     page = context.user_data.get("user_list_page", 0)
     search_filter = context.user_data.get("user_list_search", "")
 
-    query = {}
-    if search_filter:
-        query = {"user_id": {"$regex": search_filter}}
-
-    all_users = list(users_collection.find(query).sort("expiry", 1))
+    all_users = list(users_collection.find({}).sort("expiry", 1))
     if search_filter:
         sf = normalize_text(search_filter)
-        all_users = [u for u in all_users if sf in str(u["user_id"])]
+        all_users = [u for u in all_users if sf in str(u["user_id"]) or sf in normalize_text(u.get("name", ""))]
+
+    context.user_data["current_rendered_users"] = all_users
 
     bot_settings = get_settings()
     ITEMS_PER_PAGE = bot_settings.get("items_per_page", 3)
@@ -572,29 +514,25 @@ async def render_user_list_page(update: Update, context: ContextTypes.DEFAULT_TY
     page_items = all_users[start_idx:end_idx]
 
     lines = ["👥 <b>𝐔𝐒𝐄𝐑𝐒 𝐕𝐀𝐋𝐈𝐃𝐈𝐓𝐘 𝐋𝐈𝐒𝐓:</b>\n"]
-    
     for idx, data in enumerate(page_items, start=start_idx + 1):
         uid = data["user_id"]
+        name = data.get("name", "Unknown")
         expiry_val = data.get("expiry")
         expiry_str = expiry_val.strftime('%Y-%m-%d %H:%M') if expiry_val else "None"
-        joined = data.get("joined_channels", [])
-        joined_text = ", ".join(joined) if joined else "None"
+        joined_channels = data.get("joined_channels", [])
+        channel_count = len(joined_channels)
         
-        user_block = (
-            f"{idx}. ID: <code>{uid}</code>\n"
+        lines.append(
+            f"{idx}. <b>{name}</b> (<code>{uid}</code>)\n"
             f"   Expiry: <b>{expiry_str}</b>\n"
-            f"   <blockquote>Joined: {joined_text}</blockquote>\n"
+            f"   Channels Joined: <b>{channel_count}</b>\n"
         )
-        lines.append(user_block)
 
     if not page_items:
         lines.append("<i>No users found matching query.</i>")
 
     lines.append(f"\nPage {page + 1} of {max_pages + 1 if max_pages >= 0 else 1}")
-    
     response_text = "\n".join(lines)
-    if len(response_text) > 4000:
-        response_text = response_text[:3950] + "\n...[truncated due to length limit]"
 
     keyboard = []
     nav_row = []
@@ -617,10 +555,7 @@ async def render_user_list_page(update: Update, context: ContextTypes.DEFAULT_TY
             await update.message.reply_text(response_text, parse_mode="HTML", reply_markup=reply_markup)
 
 
-# --- FORCE SUBSCRIBE CHECK HELPER ---
-
 async def check_force_subscribe(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> list:
-    """Checks if the user has joined all force subscribe channels. Returns list of unjoined channel metadata/links."""
     bot_settings = get_settings()
     fs_ids = bot_settings.get("force_subscribe_ids", [])
     if not fs_ids:
@@ -632,19 +567,16 @@ async def check_force_subscribe(user_id: int, context: ContextTypes.DEFAULT_TYPE
             member = await context.bot.get_chat_member(chat_id=ch_id, user_id=user_id)
             if member.status not in ["member", "administrator", "creator"]:
                 chat_info = await context.bot.get_chat(chat_id=ch_id)
-                invite_link = chat_info.invite_link
-                if not invite_link:
-                    invite_link = f"https://t.me/{chat_info.username}" if chat_info.username else f"https://t.me/{BOT_USERNAME}"
+                invite_link = chat_info.invite_link or f"https://t.me/{chat_info.username}"
                 unjoined.append({"name": chat_info.title or f"Channel {ch_id}", "link": invite_link})
         except Exception as e:
-            logger.error(f"Error checking force subscribe status for channel {ch_id}: {e}")
+            logger.error(f"Error checking force subscribe status: {e}")
     return unjoined
 
 
 # --- HANDLERS FOR TEXT MESSAGES & ADMIN FLOWS ---
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles general text, admin setup configurations, and search queries."""
     if not await rate_limit_middleware(update, context):
         return
     if await maintenance_check(update, context):
@@ -672,17 +604,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                         elif line.lower().startswith("more info:"):
                             more_info = line.split(":", 1)[1].strip()
 
-                    if not ch_id or not c_type or not c_category:
-                        raise ValueError("Missing fields")
-
-                    chat_member = await context.bot.get_chat_member(ch_id, context.bot.id)
-                    if not chat_member.can_promote_members and chat_member.status != "administrator":
-                        await update.message.reply_text("❌ Bot lacks admin rights or permissions.")
-                        return
-
                     chat_info = await context.bot.get_chat(ch_id)
                     ch_name = chat_info.title or f"Channel {ch_id}"
-                    start_token = f"ch_{ch_name}"
+                    start_token = f"ch_{ch_id}"
                     start_link = f"https://t.me/{BOT_USERNAME}?start={start_token}"
 
                     channels_collection.insert_one({
@@ -702,18 +626,50 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     await update.message.reply_text(f"❌ Error parsing format: {e}")
                     return
 
+            elif state == "awaiting_link_details":
+                try:
+                    lines = text.split("\n")
+                    ch_name, c_type, c_category, more_info, dist_link = "", "free", "", "", ""
+                    for line in lines:
+                        if line.lower().startswith("channel name:"):
+                            ch_name = line.split(":", 1)[1].strip()
+                        elif line.lower().startswith("types:"):
+                            c_type = line.split(":", 1)[1].strip().lower()
+                        elif line.lower().startswith("category:"):
+                            c_category = line.split(":", 1)[1].strip()
+                        elif line.lower().startswith("more:"):
+                            more_info = line.split(":", 1)[1].strip()
+                        elif line.lower().startswith("link:"):
+                            dist_link = line.split(":", 1)[1].strip()
+
+                    token = f"lnk_{abs(hash(ch_name))}"
+                    channels_collection.insert_one({
+                        "id": -999999,
+                        "name": ch_name,
+                        "category": c_category,
+                        "type": c_type,
+                        "link": dist_link,
+                        "token": token,
+                        "more_info": more_info
+                    })
+
+                    del PENDING_ADMIN_ACTIONS[user_id]
+                    await update.message.reply_text(f"✅ Distribution Link for <b>{ch_name}</b> added successfully!", parse_mode="HTML")
+                    return
+                except Exception as e:
+                    await update.message.reply_text(f"❌ Error saving link: {e}")
+                    return
+
             elif state == "awaiting_serial_select":
                 try:
                     serial = int(text)
-                    all_channels = list(channels_collection.find({}))
-                    if 1 <= serial <= len(all_channels):
-                        ch = all_channels[serial - 1]
-                        context.user_data["editing_serial"] = ch["id"]
+                    rendered_items = context.user_data.get("current_rendered_channels", [])
+                    if 1 <= serial <= len(rendered_items):
+                        ch = rendered_items[serial - 1]
+                        context.user_data["editing_serial"] = ch.get("id")
                         
-                        # Feature 8: Inline removal confirmation demo option
                         keyboard = [
-                            [InlineKeyboardButton("✏️ Edit Details", callback_data="proceed_edit_channel"),
-                             InlineKeyboardButton("🗑️ Yes, Delete", callback_data=f"confirm_del_ch_{ch['id']}")],
+                            [InlineKeyboardButton("🗑️ Delete Channel", callback_data=f"confirm_del_ch_{ch.get('id')}")],
                             [InlineKeyboardButton("Cancel", callback_data="confirm_no")]
                         ]
                         await update.message.reply_text(f"⚠️ Selected Channel: <b>{ch['name']}</b>. Choose action:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -723,107 +679,47 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     await update.message.reply_text("❌ Please send a valid numeric serial index.")
                 return
 
-            elif state == "awaiting_channel_edit_template":
-                try:
-                    ch_db_id = context.user_data.get("editing_serial")
-                    lines = text.split("\n")
-                    ch_id, c_type, c_category, more_info = None, None, None, ""
-                    for line in lines:
-                        if line.lower().startswith("channel id:"):
-                            ch_id = int(line.split(":", 1)[1].strip())
-                        elif line.lower().startswith("type:"):
-                            c_type = line.split(":", 1)[1].strip().lower()
-                        elif line.lower().startswith("category:"):
-                            c_category = line.split(":", 1)[1].strip()
-                        elif line.lower().startswith("more info:"):
-                            more_info = line.split(":", 1)[1].strip()
-
-                    if ch_db_id is not None:
-                        chat_info = await context.bot.get_chat(ch_id)
-                        ch_name = chat_info.title or "Channel"
-
-                        channels_collection.update_one(
-                            {"id": ch_db_id},
-                            {"$set": {
-                                "id": ch_id,
-                                "name": ch_name,
-                                "type": c_type,
-                                "category": c_category,
-                                "more_info": more_info
-                            }}
-                        )
-
-                        del PENDING_ADMIN_ACTIONS[user_id]
-                        await update.message.reply_text("✅ Channel database updated successfully!")
-                    else:
-                        await update.message.reply_text("❌ Session expired. Try /list_channel again.")
-                    return
-                except Exception as e:
-                    await update.message.reply_text(f"❌ Failed to update item: {e}")
-                    return
-
             elif state == "awaiting_settings_edit":
                 try:
                     lines = text.split("\n")
-                    new_admins = bot_settings["admins"]
                     new_more_link = bot_settings["more_channel_link"]
-                    new_fs_ids = bot_settings["force_subscribe_ids"]
+                    new_start_url = bot_settings.get("start_media_url", "")
+                    new_qr_url = bot_settings.get("qr_image_url", "")
+                    new_verify_url = bot_settings.get("verify_banner_url", "")
                     new_prices = bot_settings["prices"].copy()
-                    new_ipp = bot_settings.get("items_per_page", 10)
 
                     for line in lines:
                         if ":" not in line:
                             continue
                         key, val = line.split(":", 1)
-                        key_lower = key.strip().lower()
-                        val_str = val.strip()
+                        key_l = key.strip().lower()
+                        val_s = val.strip()
 
-                        if "admis" in key_lower:
-                            if val_str.lower() == "none" or not val_str:
-                                new_admins = [DEFAULT_ADMIN_ID]
-                            else:
-                                admin_list = []
-                                for part in val_str.split(","):
-                                    part_clean = part.strip()
-                                    if part_clean.isdigit():
-                                        admin_list.append(int(part_clean))
-                                if DEFAULT_ADMIN_ID not in admin_list:
-                                    admin_list.append(DEFAULT_ADMIN_ID)
-                                new_admins = admin_list
-                        elif "more channel link" in key_lower:
-                            new_more_link = val_str
-                        elif "force subscribe channel ids" in key_lower:
-                            if val_str.lower() == "none" or not val_str:
-                                new_fs_ids = []
-                            else:
-                                fs_list = []
-                                for part in val_str.split(","):
-                                    part_clean = part.strip()
-                                    if part_clean:
-                                        try:
-                                            fs_list.append(int(part_clean))
-                                        except ValueError:
-                                            pass
-                                new_fs_ids = fs_list
-                        elif "1 month price" in key_lower:
-                            new_prices["1"] = val_str
-                        elif "2 month price" in key_lower:
-                            new_prices["2"] = val_str
-                        elif "3 month price" in key_lower:
-                            new_prices["3"] = val_str
-                        elif "items per page" in key_lower:
-                            new_ipp = int(val_str)
+                        if "more channel link" in key_l:
+                            new_more_link = val_s
+                        elif "start media url" in key_l:
+                            new_start_url = val_s
+                        elif "qr/pay image url" in key_l or "qr image url" in key_l:
+                            new_qr_url = val_s
+                        elif "verify banner url" in key_l:
+                            new_verify_url = val_s
+                        elif "1 month price" in key_l:
+                            new_prices["1"] = val_s
+                        elif "2 month price" in key_l:
+                            new_prices["2"] = val_s
+                        elif "3 month price" in key_l:
+                            new_prices["3"] = val_s
 
                     update_settings({
-                        "admins": new_admins,
                         "more_channel_link": new_more_link,
-                        "force_subscribe_ids": new_fs_ids,
-                        "prices": new_prices,
-                        "items_per_page": new_ipp
+                        "start_media_url": new_start_url,
+                        "qr_image_url": new_qr_url,
+                        "verify_banner_url": new_verify_url,
+                        "prices": new_prices
                     })
 
                     del PENDING_ADMIN_ACTIONS[user_id]
-                    await update.message.reply_text("✅ Settings updated successfully!")
+                    await update.message.reply_text("✅ Settings and image URLs updated successfully!")
                     return
                 except Exception as e:
                     await update.message.reply_text(f"❌ Error updating settings: {e}")
@@ -831,53 +727,54 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
             elif state == "awaiting_ch_search_query":
                 context.user_data["channel_list_search"] = text
+                context.user_data["channel_list_page"] = 0
                 del PENDING_ADMIN_ACTIONS[user_id]
                 await render_channel_list_page(update, context, edit_message=False)
                 return
 
             elif state == "awaiting_usr_search_query":
                 context.user_data["user_list_search"] = text
+                context.user_data["user_list_page"] = 0
                 del PENDING_ADMIN_ACTIONS[user_id]
                 await render_user_list_page(update, context, edit_message=False)
                 return
+
+    # Track user info on message interaction
+    user = update.effective_user
+    if user:
+        users_collection.update_one(
+            {"user_id": user.id},
+            {"$set": {"name": user.full_name or "User"}, "$setOnInsert": {"expiry": datetime.now(), "joined_channels": []}},
+            upsert=True
+        )
 
     await handle_search_message_logic(update, context)
 
 
 async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shows subscription plans, payment details, QR code, and actions as media type."""
     if await maintenance_check(update, context):
         return
     bot_settings = get_settings()
     p1 = bot_settings["prices"]["1"]
     p2 = bot_settings["prices"]["2"]
     p3 = bot_settings["prices"]["3"]
+    qr_url = bot_settings.get("qr_image_url", QR_IMAGE_URL)
 
     plan_text = (
         "💎 <b>𝐏𝐑𝐄𝐌𝐈𝐔𝐌 𝐒𝐔𝐁𝐒𝐂𝐑𝐈𝐏𝐓𝐈𝐎𝐍 𝐏𝐋𝐀𝐍𝐒</b>\n\n"
-        f"<blockquote>• <b>₹{p1} INR</b> for 1 Month</blockquote>\n"
-        f"<blockquote>• <b>₹{p2} INR</b> for 2 Months</blockquote>\n"
-        f"<blockquote>• <b>₹{p3} INR</b> for 3 Months</blockquote>\n\n"
-        "<b>UPI ID:</b> <code>padhand171@okicici</code>\n\n"
-        "Scan the QR code or click the button to pay:"
+        f"• <b>₹{p1} INR</b> for 1 Month\n"
+        f"• <b>₹{p2} INR</b> for 2 Months\n"
+        f"• <b>₹{p3} INR</b> for 3 Months\n\n"
+        "<b>UPI ID:</b> <code>fshhs@hshs</code>"
     )
-    
     keyboard = [
         [InlineKeyboardButton("💳 Pay Now", url="https://rb.gy/81kgkx")],
-        [InlineKeyboardButton("📤 Send Screenshot", url="https://t.me/Digital_adminbot")]
+        [InlineKeyboardButton("📤 Send Screenshot", url="https://t.me/idffajnbot")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_photo(
-        photo=QR_IMAGE_URL,
-        caption=plan_text,
-        parse_mode="HTML",
-        reply_markup=reply_markup
-    )
+    await update.message.reply_photo(photo=qr_url, caption=plan_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Displays help commands based on user roles (Admin vs Regular User)."""
     if await maintenance_check(update, context):
         return
     user_id = update.effective_user.id
@@ -886,25 +783,24 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_help = (
         "📖 <b>𝐔𝐒𝐄𝐑 𝐂𝐎𝐌𝐌𝐀𝐍𝐃𝐒:</b>\n"
-        "• /start - Start the bot & access items\n"
-        "• /plan - View premium subscription plans & payment options\n"
-        "• /stats - View your account status, ID, expiry, and joined list\n"
-        "• /language - Change preferred bot language\n"
-        "• /help - Show available commands\n"
-        "• /cancel - Cancel any current operation\n"
-        "• <i>Send any keyword to search database items</i>"
+        "• /start - Start bot\n"
+        "• /plan - View subscription plans\n"
+        "• /stats - Account status\n"
+        "• /language - Toggle language\n"
+        "• /help - Help guide"
     )
 
     if is_admin:
         admin_help = (
             "\n\n⚙️ <b>𝐀𝐃𝐌𝐈𝐍 𝐂𝐎𝐌𝐌𝐀𝐍𝐃𝐒:</b>\n"
-            "• /add_channel - Add a new channel configuration\n"
-            "• /list_channel - List and edit managed channels\n"
-            "• /settings - View and edit bot settings\n"
-            "• /backup - Export MongoDB backup file (.json)\n"
-            "• /broadcast - Broadcast text/photo/video to users\n"
-            "• /add_user <code>{id} {validity}</code> - Grant user time (e.g. 7d, 30m)\n"
-            "• /list_user - List premium users sorted by expiry"
+            "• /add_channel - Add Telegram channel\n"
+            "• /add_link - Add distribution link\n"
+            "• /list_channel - Manage channels\n"
+            "• /settings - Bot configuration (Images & Prices)\n"
+            "• /backup - Database backup\n"
+            "• /broadcast - Broadcast message\n"
+            "• /add_user - Grant user validity\n"
+            "• /list_user - List users with channel metrics"
         )
         await update.message.reply_text(user_help + admin_help, parse_mode="HTML")
     else:
@@ -912,28 +808,28 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles /start command, enforces force subscription & verification requirements with media type start response."""
     if not await rate_limit_middleware(update, context):
         return
     if await maintenance_check(update, context):
         return
 
-    user_id = update.effective_user.id
+    user = update.effective_user
+    user_id = user.id
+    
+    users_collection.update_one(
+        {"user_id": user_id},
+        {"$set": {"name": user.full_name or "User"}, "$setOnInsert": {"expiry": datetime.now(), "joined_channels": []}},
+        upsert=True
+    )
 
-    # --- FORCE SUBSCRIBE CHECK ---
     unjoined_channels = await check_force_subscribe(user_id, context)
     if unjoined_channels:
-        fs_text = "⚠️ <b>Please join our mandatory channels below to use this bot:</b>\n\n"
+        fs_text = "⚠️ <b>Please join our mandatory channels below:</b>\n\n"
         fs_keyboard = []
         for ch in unjoined_channels:
             fs_keyboard.append([InlineKeyboardButton(f"📢 Join {ch['name']}", url=ch['link'])])
         fs_keyboard.append([InlineKeyboardButton("✅ I Have Joined", callback_data="check_fs_complete")])
-        
-        await update.message.reply_text(
-            fs_text,
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(fs_keyboard)
-        )
+        await update.message.reply_text(fs_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(fs_keyboard))
         return
 
     args = context.args
@@ -945,174 +841,55 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             channel_id = matched_item["id"]
             c_type = matched_item["type"]
 
-            # --- USER PREMIUM CHECK ---
             user_record = users_collection.find_one({"user_id": user_id})
             is_admin = user_id in bot_settings["admins"] or user_id in ADMIN_IDS
             now = datetime.now()
             is_user_premium = is_admin or (user_record and user_record.get("expiry") and user_record["expiry"] > now)
 
-            # --- ACCESS RESTRICTION CHECKS FOR PREMIUM CHANNELS ---
             if c_type == "premium" and not is_user_premium:
-                await update.message.reply_text(
-                    "<blockquote>🔒 <b>Access Denied:</b> This is a <b>Premium</b> channel.</blockquote>\n"
-                    "Please use /plan to purchase a subscription package.",
-                    parse_mode="HTML"
-                )
+                await update.message.reply_text("🔒 <b>Access Denied:</b> Premium subscription required.", parse_mode="HTML")
                 return
-
-            # --- VERIFICATION STEP HANDLING ---
-            if c_type in ["free", "verify"] and not is_user_premium:
-                if not VERIFICATION_STATE.get((user_id, token), False):
-                    destination_url = f"https://t.me/{BOT_USERNAME}?start={token}"
-                    shortened_link = destination_url
-                    try:
-                        api_url = f"https://arolinks.com/api?api={AROLINKS_API_TOKEN}&url={destination_url}"
-                        response = requests.get(api_url, timeout=5)
-                        data = response.json()
-                        if data.get("status") == "success" or "shortenedUrl" in data:
-                            shortened_link = data.get("shortenedUrl", data.get("url", destination_url))
-                    except Exception as e:
-                        logger.error(f"Arolinks API request failed: {e}")
-
-                    VERIFICATION_STATE[(user_id, token)] = False
-                    
-                    verify_text = (
-                        "🛡️ <b>𝚅𝚎𝚛𝚒𝚏𝚒𝚌𝚊𝚝𝚒𝚘𝚗 𝚁𝚎𝚚𝚞𝚒𝚛𝚎𝚍</b>\n\n"
-                        "Please complete the shortener verification link below to unlock access, or buy premium to bypass verification completely!\n\n"
-                        "💎 <i>Buy Premium via /plan to skip verification.</i>"
-                    )
-                    keyboard = [
-                        [InlineKeyboardButton("🔗 Complete Verification", url=shortened_link)],
-                        [InlineKeyboardButton("✅ I Have Verified", callback_data=f"verify_check_{token}")]
-                    ]
-                    
-                    await update.message.reply_photo(
-                        photo=VERIFY_BANNER_URL,
-                        caption=verify_text,
-                        parse_mode="HTML",
-                        reply_markup=InlineKeyboardMarkup(keyboard)
-                    )
-                    return
-
-            # --- EXISTING JOIN TRACKING & EXPIRY ---
-            tracker = trackers_collection.find_one({"user_id": user_id, "channel_id": channel_id})
-            if tracker and now < tracker["expiry"]:
-                expiry_dt = tracker["expiry"]
-                await update.message.reply_text(
-                    f"⏳ You have already joined this channel. \nAccess expires on `{expiry_dt.strftime('%Y-%m-%d %H:%M')}`."
-                )
-                return
-            
-            new_tracker_expiry = now + timedelta(days=7)
-            trackers_collection.update_one(
-                {"user_id": user_id, "channel_id": channel_id},
-                {"$set": {"expiry": new_tracker_expiry}},
-                upsert=True
-            )
-
-            # Update user joined channels record
-            users_collection.update_one(
-                {"user_id": user_id},
-                {
-                    "$setOnInsert": {"expiry": now},
-                    "$addToSet": {"joined_channels": matched_item['name']}
-                },
-                upsert=True
-            )
 
             target_invite_link = matched_item["link"]
-
-            try:
-                if c_type == "verify":
-                    invite = await context.bot.create_chat_invite_link(
-                        chat_id=channel_id,
-                        creates_join_request=True,
-                        name=f"Verify User {user_id}"
-                    )
-                    target_invite_link = invite.invite_link
-                elif c_type == "free":
-                    invite = await context.bot.create_chat_invite_link(
-                        chat_id=channel_id,
-                        member_limit=1,
-                        name=f"Free Single Use {user_id}"
-                    )
-                    target_invite_link = invite.invite_link
-                else:
-                    invite = await context.bot.create_chat_invite_link(
-                        chat_id=channel_id,
-                        name=f"Premium Access {user_id}"
-                    )
-                    target_invite_link = invite.invite_link
-            except Exception as e:
-                logger.error(f"Failed to generate dynamic invite link: {e}")
+            
+            # Record joined channel
+            users_collection.update_one(
+                {"user_id": user_id},
+                {"$addToSet": {"joined_channels": matched_item["name"]}}
+            )
 
             message_text = (
                 "📂 <b>𝙲𝚑𝚊𝚗𝚗𝚎𝚕 𝙳𝚎𝚝𝚊𝚒𝚕𝚜</b>\n\n"
-                "<blockquote>"
                 f"<b>𝙽𝚊𝚖𝚎:</b> {matched_item['name']}\n"
-                f"<b>𝚃𝚢𝚙𝚎:</b> {matched_item['type'].capitalize()}\n"
+                f"<b>𝚃𝚢𝚙𝚎:</b> {c_type.capitalize()}\n"
                 f"<b>𝙲𝚊𝚝𝚎𝚐𝚘𝚛𝚢:</b> {matched_item['category']}\n"
-                "🕒 <b>Access Duration:</b> 7 Days\n"
-                "</blockquote>"
             )
-
-            keyboard = [
-                [InlineKeyboardButton("𝙹𝚘𝚒𝚗 𝙲𝚑𝚊𝚗𝚗𝚎𝚕", url=target_invite_link)]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-
-            await update.message.reply_text(
-                message_text,
-                parse_mode="HTML",
-                reply_markup=reply_markup
-            )
+            keyboard = [[InlineKeyboardButton("𝙹𝚘𝚒𝚗 𝙲𝚑𝚊𝚗𝚗𝚎𝚕", url=target_invite_link)]]
+            await update.message.reply_text(message_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
             return
 
-    await update.message.reply_photo(
-        photo=START_MEDIA_URL,
-        caption=tr(user_id, "welcome"),
-        parse_mode="HTML"
-    )
+    start_url = bot_settings.get("start_media_url", START_MEDIA_URL)
+    await update.message.reply_photo(photo=start_url, caption=tr(user_id, "welcome"), parse_mode="HTML")
 
 
 async def chat_join_request_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Automatically approves incoming join requests for verification channels and tracks sessions in MongoDB."""
     query: ChatJoinRequest = update.chat_join_request
     if not query:
         return
-
-    user_id = query.from_user.id
-    chat_id = query.chat.id
-
     try:
-        await context.bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
-        trackers_collection.update_one(
-            {"user_id": user_id, "channel_id": chat_id},
-            {"$set": {"expiry": datetime.now() + timedelta(days=7)}},
-            upsert=True
-        )
-        
-        await context.bot.send_message(
-            chat_id=user_id,
-            text="<blockquote>✅ Verification completed via Arolinks flow! Your join request has been approved for 7 days.</blockquote>"
-        )
+        await context.bot.approve_chat_join_request(chat_id=query.chat.id, user_id=query.from_user.id)
     except Exception as e:
-        logger.error(f"Failed to process join request: {e}")
+        logger.error(f"Failed to approve request: {e}")
 
 
-# --- FEATURE 5: ADVANCED MULTI-KEYWORD & FUZZY SEARCH ---
 async def handle_search_message_logic(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Processes search queries with thefuzz fuzzy matching support from MongoDB."""
     query = update.message.text.strip()
     if not query:
         return
 
     all_channels = list(channels_collection.find({}))
     channel_names = [ch["name"] for ch in all_channels]
-    
-    # Use thefuzz to extract matches with score threshold
     fuzzy_results = process.extract(query, channel_names, limit=15, scorer=fuzz.token_sort_ratio)
-    
     matched_names = {res[0] for res in fuzzy_results if res[1] >= 50}
     found_items = [ch for ch in all_channels if ch["name"] in matched_names or normalize_text(query) in normalize_text(f"{ch['name']} {ch['category']} {ch['type']}")]
 
@@ -1123,21 +900,15 @@ async def handle_search_message_logic(update: Update, context: ContextTypes.DEFA
     await send_search_results(update, context, edit_message=False)
 
 
-async def send_search_results(
-    update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message: bool = False
-):
-    """Renders UI layout with pagination and category options."""
+async def send_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE, edit_message: bool = False):
     query = context.user_data.get("search_query", "")
     all_channels = list(channels_collection.find({}))
     found_items = context.user_data.get("found_items", all_channels)
     page = context.user_data.get("current_page", 0)
 
-    total_items = len(all_channels)
-    found_count = len(found_items)
-
     bot_settings = get_settings()
     ITEMS_PER_PAGE = bot_settings.get("items_per_page", 10)
-    max_pages = (found_count - 1) // ITEMS_PER_PAGE if found_count > 0 else 0
+    max_pages = (len(found_items) - 1) // ITEMS_PER_PAGE if found_items else 0
     page = max(0, min(page, max_pages))
     context.user_data["current_page"] = page
 
@@ -1146,341 +917,139 @@ async def send_search_results(
     current_page_items = found_items[start_idx:end_idx]
 
     text_lines = [
-        "📊 <b>𝐒𝐄𝐀𝐑𝐂𝐇 𝐀𝐍𝐀𝐋𝐘𝐓𝐈𝐂𝐒</b>",
-        "──────────────────────────",
-        "<blockquote>"
-        f"▪ 𝐓𝐨𝐭𝐚𝐥 𝐈𝐭𝐞𝐦𝐬         : {total_items:,}\n"
-        f"▪ 𝐌𝐚𝐭𝐜𝐡𝐞𝐬 𝐅𝐨𝐮𝐧𝐝  : {found_count:,}\n"
-        f"▪ 𝐐𝐮𝐞𝐫𝐲 𝐒𝐭𝐫𝐢𝐧𝐠      : &quot;{query}&quot;\n"
-        f"▪ 𝐍𝐚𝐯𝐢𝐠𝐚𝐭𝐢𝐨𝐧          : 𝐏𝐚𝐠𝐞 {page + 1} of {max_pages + 1 if max_pages >= 0 else 1}"
-        "</blockquote>",
-        "──────────────────────────",
-        "📌 <b>𝐌𝐀𝐓𝐂𝐇𝐈𝐍𝐆 𝐑𝐄𝐂𝐎𝐑𝐃𝐒:</b>",
+        "📊 <b>𝐒𝐄𝐀𝐑𝐂𝐇 𝐑𝐄𝐒𝐔𝐋𝐓𝐒</b>",
+        f"▪ 𝐐𝐮𝐞𝐫𝐲: &quot;{query}&quot;",
+        f"▪ 𝐏𝐚𝐠𝐞: {page + 1} of {max_pages + 1}\n",
+        "📌 <b>𝐌𝐀𝐓𝐂𝐇𝐈𝐍𝐆 𝐑𝐄𝐂𝐎𝐑𝐃𝐒:</b>"
     ]
 
-    if not current_page_items:
-        text_lines.append("<i>No items found matching your filter criteria.</i>")
-    else:
-        for idx, item in enumerate(current_page_items, start=start_idx + 1):
-            more_link_base = bot_settings["more_channel_link"]
-            if not more_link_base.endswith("/"):
-                more_link_base += "/"
-            more_info_val = item.get("more_info", "")
-            more_info_hyperlink = f"{more_link_base}{more_info_val}" if more_info_val else more_link_base
-
-            text_lines.append(f" <blockquote>{idx}. <a href=\"{item['link']}\">{item['name']}</a> [{item['type'].upper()}] - <a href=\"{more_info_hyperlink}\">More Info</a></blockquote>")
+    for idx, item in enumerate(current_page_items, start=start_idx + 1):
+        dist_link = item.get("link", "#")
+        text_lines.append(f"<b>{idx}.</b> <a href='{dist_link}'>{item['name']}</a> [{item['type'].upper()}]")
 
     response_text = "\n".join(text_lines)
-
     keyboard = [
         [
             InlineKeyboardButton("🟢 Free", callback_data="filter_type_free"),
             InlineKeyboardButton("🟡 Verify", callback_data="filter_type_verify"),
             InlineKeyboardButton("🟣 Premium", callback_data="filter_type_premium"),
-        ],
-        [
-            InlineKeyboardButton("📂 Category Filters", callback_data="show_categories")
         ]
     ]
 
     nav_row = []
     if page > 0:
-        nav_row.append(InlineKeyboardButton("⬅️ 𝐏𝐫𝐞𝐯", callback_data="prev_page"))
-    nav_row.append(InlineKeyboardButton("🔍 Search", callback_data="search_prompt_trigger"))
-    if end_idx < found_count:
-        nav_row.append(InlineKeyboardButton("𝐍𝐞𝐱𝐭 ➡️", callback_data="next_page"))
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data="prev_page"))
+    if end_idx < len(found_items):
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data="next_page"))
     if nav_row:
         keyboard.append(nav_row)
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if edit_message:
-        query_obj = update.callback_query
-        await query_obj.edit_message_text(
-            text=response_text,
-            reply_markup=reply_markup,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-        )
+        await update.callback_query.edit_message_text(text=response_text, reply_markup=reply_markup, parse_mode="HTML", disable_web_page_preview=True)
     else:
-        await update.message.reply_text(
-            text=response_text,
-            reply_markup=reply_markup,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-        )
+        await update.message.reply_text(text=response_text, reply_markup=reply_markup, parse_mode="HTML", disable_web_page_preview=True)
 
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles inline button clicks for filtering, types, pagination, settings edit prompt, and verification checks."""
     query = update.callback_query
     await query.answer()
     data = query.data
     user_id = query.from_user.id
     bot_settings = get_settings()
 
-    # Feature 2: Maintenance Mode toggle callback
     if data == "toggle_maintenance":
         if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
-            await query.answer("⛔ Unauthorized.", show_alert=True)
             return
         current_mode = bot_settings.get("maintenance_mode", False)
         update_settings({"maintenance_mode": not current_mode})
-        await query.answer(f"Maintenance Mode set to: {not current_mode}", show_alert=True)
+        await query.answer(f"Maintenance Mode: {not current_mode}", show_alert=True)
         return
 
-    # Feature 6: Language selection callbacks
     if data.startswith("set_lang_"):
         lang = data.replace("set_lang_", "")
         users_collection.update_one({"user_id": user_id}, {"$set": {"language": lang}}, upsert=True)
-        await query.edit_message_text(f"✅ Language successfully changed to: {'English 🇬🇧' if lang == 'en' else 'Hindi 🇮🇳'}")
+        await query.edit_message_text(f"✅ Language updated to: {lang.upper()}")
         return
 
-    # Feature 8: Confirmations
     if data.startswith("confirm_del_ch_"):
         ch_id = int(data.replace("confirm_del_ch_", ""))
         channels_collection.delete_one({"id": ch_id})
-        await query.edit_message_text("✅ Channel successfully deleted with confirmation!")
-        return
-    elif data == "proceed_edit_channel":
-        PENDING_ADMIN_ACTIONS[user_id] = "awaiting_channel_edit_template"
-        await query.message.reply_text("✏️ Please send the updated channel details template format now.")
-        return
-
-    if data == "check_fs_complete":
-        unjoined = await check_force_subscribe(user_id, context)
-        if unjoined:
-            await query.answer("❌ You have not joined all required channels yet!", show_alert=True)
-        else:
-            await query.edit_message_text("✅ Thank you for joining! You can now use /start again or send your search keyword.")
+        await query.edit_message_text("✅ Channel successfully deleted!")
         return
 
     if data == "edit_settings_prompt":
         if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
-            await query.answer("⛔ Unauthorized.", show_alert=True)
             return
-        
         PENDING_ADMIN_ACTIONS[user_id] = "awaiting_settings_edit"
-        
-        listed_admins = [str(adm) for adm in bot_settings["admins"] if adm != DEFAULT_ADMIN_ID]
-        admins_str = ", ".join(listed_admins) if listed_admins else ""
-        fs_ids = ", ".join(str(i) for i in bot_settings["force_subscribe_ids"]) if bot_settings["force_subscribe_ids"] else ""
-
         edit_template = (
-            f"Admis: {admins_str}\n"
             f"More channel link: {bot_settings['more_channel_link']}\n"
-            f"Force subscribe channel ids: {fs_ids}\n"
+            f"Start Media URL: {bot_settings.get('start_media_url', '')}\n"
+            f"QR/Pay Image URL: {bot_settings.get('qr_image_url', '')}\n"
+            f"Verify Banner URL: {bot_settings.get('verify_banner_url', '')}\n"
             f"1 month price: {bot_settings['prices']['1']}\n"
             f"2 month price: {bot_settings['prices']['2']}\n"
-            f"3 month price: {bot_settings['prices']['3']}\n"
-            f"Items Per Page: {bot_settings.get('items_per_page', 10)}"
+            f"3 month price: {bot_settings['prices']['3']}"
         )
-        await query.message.reply_text(
-            "✏️ Edit the details in below and send back to me:\n\n" + f"<code>{edit_template}</code>",
-            parse_mode="HTML"
-        )
-        return
-
-    if data.startswith("verify_check_"):
-        token = data.replace("verify_check_", "")
-        VERIFICATION_STATE[(user_id, token)] = True
-        
-        matched_item = channels_collection.find_one({"token": token})
-        if not matched_item:
-            await query.message.reply_text("❌ Item session expired. Please send /start again.")
-            return
-
-        channel_id = matched_item["id"]
-        c_type = matched_item["type"]
-        now = datetime.now()
-        
-        trackers_collection.update_one(
-            {"user_id": user_id, "channel_id": channel_id},
-            {"$set": {"expiry": now + timedelta(days=7)}},
-            upsert=True
-        )
-        
-        users_collection.update_one(
-            {"user_id": user_id},
-            {
-                "$setOnInsert": {"expiry": now},
-                "$addToSet": {"joined_channels": matched_item['name']}
-            },
-            upsert=True
-        )
-
-        target_invite_link = matched_item["link"]
-        try:
-            if c_type == "verify":
-                invite = await context.bot.create_chat_invite_link(
-                    chat_id=channel_id,
-                    creates_join_request=True,
-                    name=f"Verify User {user_id}"
-                )
-                target_invite_link = invite.invite_link
-            elif c_type == "free":
-                invite = await context.bot.create_chat_invite_link(
-                    chat_id=channel_id,
-                    member_limit=1,
-                    name=f"Free Single Use {user_id}"
-                )
-                target_invite_link = invite.invite_link
-        except Exception as e:
-            logger.error(f"Failed to generate invite link after verification: {e}")
-
-        message_text = (
-            "✅ <b>Verification Successful!</b>\n\n"
-            "📂 <b>𝙲𝚑𝚊𝚗𝚗𝚎𝚕 𝙳𝚎𝚝𝚊𝚒𝚕𝚜</b>\n\n"
-            "<blockquote>"
-            f"<b>𝙽𝚊𝚖𝚎:</b> {matched_item['name']}\n"
-            f"<b>𝚃𝚢𝚙𝚎:</b> {matched_item['type'].capitalize()}\n"
-            f"<b>𝙲𝚊𝚝𝚎𝚐𝚘𝚛𝚢:</b> {matched_item['category']}\n"
-            "🕒 <b>Access Duration:</b> 7 Days\n"
-            "</blockquote>"
-        )
-        keyboard = [[InlineKeyboardButton("𝙹𝚘𝚒𝚗 𝙲𝚑𝚊𝚗𝚗𝚎𝚕", url=target_invite_link)]]
-        
-        await query.edit_message_text(
-            text=message_text,
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        await query.message.reply_text("✏️ Edit settings and send back:\n\n" + f"<code>{edit_template}</code>", parse_mode="HTML")
         return
 
     if data == "next_page":
         context.user_data["current_page"] += 1
         await send_search_results(update, context, edit_message=True)
-
     elif data == "prev_page":
         context.user_data["current_page"] -= 1
         await send_search_results(update, context, edit_message=True)
-
     elif data == "ch_page_next":
         context.user_data["channel_list_page"] += 1
         await render_channel_list_page(update, context, edit_message=True)
-
     elif data == "ch_page_prev":
         context.user_data["channel_list_page"] -= 1
         await render_channel_list_page(update, context, edit_message=True)
-
     elif data == "usr_page_next":
         context.user_data["user_list_page"] += 1
         await render_user_list_page(update, context, edit_message=True)
-
     elif data == "usr_page_prev":
         context.user_data["user_list_page"] -= 1
         await render_user_list_page(update, context, edit_message=True)
-
     elif data == "ch_search_prompt":
-        PENDING_ADMIN_ACTIONS[update.effective_user.id] = "awaiting_ch_search_query"
-        await query.message.reply_text("🔍 Send the channel name or ID keyword to filter list:")
-
+        PENDING_ADMIN_ACTIONS[user_id] = "awaiting_ch_search_query"
+        await query.message.reply_text("🔍 Send channel keyword filter:")
     elif data == "usr_search_prompt":
-        PENDING_ADMIN_ACTIONS[update.effective_user.id] = "awaiting_usr_search_query"
-        await query.message.reply_text("🔍 Send the user ID keyword to filter list:")
-
-    elif data == "search_prompt_trigger":
-        await query.message.reply_text("🔍 Send any text keyword to search channel records:")
-
-    elif data.startswith("filter_type_"):
-        selected_type = data.replace("filter_type_", "")
-        found_items = list(channels_collection.find({"type": selected_type}))
-        context.user_data["search_query"] = f"Type: {selected_type.capitalize()}"
-        context.user_data["found_items"] = found_items
-        context.user_data["current_page"] = 0
-        await send_search_results(update, context, edit_message=True)
-
-    elif data == "show_categories":
-        all_channels = list(channels_collection.find({}))
-        categories_list = sorted(list(set(cat["category"] for cat in all_channels)))
-        cat_buttons = [
-            [InlineKeyboardButton(f"📁 {cat}", callback_data=f"filter_cat_{cat}")]
-            for cat in categories_list
-        ]
-        cat_buttons.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_search")])
-        
-        await query.edit_message_text(
-            text="🏷️ <b>Select Category Filter:</b>",
-            reply_markup=InlineKeyboardMarkup(cat_buttons),
-            parse_mode="HTML"
-        )
-
-    elif data.startswith("filter_cat_"):
-        selected_cat = data.replace("filter_cat_", "")
-        found_items = list(channels_collection.find({"category": selected_cat}))
-        context.user_data["search_query"] = f"Category: {selected_cat}"
-        context.user_data["found_items"] = found_items
-        context.user_data["current_page"] = 0
-        await send_search_results(update, context, edit_message=True)
-
-    elif data == "back_to_search":
-        context.user_data["found_items"] = list(channels_collection.find({}))
-        context.user_data["search_query"] = ""
-        await send_search_results(update, context, edit_message=True)
+        PENDING_ADMIN_ACTIONS[user_id] = "awaiting_usr_search_query"
+        await query.message.reply_text("🔍 Send user ID/Name filter:")
 
 
-# --- FEATURE 4: INTERACTIVE NOTIFICATION REMINDERS (BACKGROUND JOB) ---
-async def background_expiry_checker(context: ContextTypes.DEFAULT_TYPE):
-    """Background task checking 7-day join validity expirations, subscriptions, and sending 24h advance warnings."""
-    now = datetime.now()
-    
-    # 24-hour advance warning for expiring trackers
-    warning_threshold = now + timedelta(hours=24)
-    approaching_trackers = list(trackers_collection.find({"expiry": {"$lte": warning_threshold, "$gt": now}, "warned": {"$ne": True}}))
-    for trk in approaching_trackers:
-        try:
-            await context.bot.send_message(chat_id=trk["user_id"], text="⚠️ Reminder: Your temporary access to a channel expires in 24 hours!")
-            trackers_collection.update_one({"_id": trk["_id"]}, {"$set": {"warned": True}})
-        except Exception as e:
-            logger.error(f"Failed to send 24h reminder: {e}")
+# --- RENDER WEB PORT BINDING SERVER ---
+web_app = Flask(__name__)
 
-    expired_trackers = list(trackers_collection.find({"expiry": {"$lte": now}}))
-    for tracker in expired_trackers:
-        user_id = tracker["user_id"]
-        channel_id = tracker["channel_id"]
-        try:
-            ch_item = channels_collection.find_one({"id": channel_id})
-            ch_name = ch_item["name"] if ch_item else "the channel"
-            
-            await context.bot.ban_chat_member(chat_id=channel_id, user_id=user_id)
-            await context.bot.unban_chat_member(chat_id=channel_id, user_id=user_id)
+@web_app.route('/')
+def health_check():
+    return "Bot is alive and running!", 200
 
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=f"⚠️ Your 7-day temporary access window has expired. You have been removed from {ch_name}."
-            )
-        except Exception as e:
-            logger.error(f"Could not revoke access for user {user_id} in channel {channel_id}: {e}")
-        
-        trackers_collection.delete_one({"_id": tracker["_id"]})
-
-    expired_users = list(users_collection.find({"expiry": {"$lte": now}}))
-    for user_record in expired_users:
-        user_id = user_record["user_id"]
-        try:
-            bot_settings = get_settings()
-            if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="⏳ Your premium subscription has expired. You are now back to the regular user tier."
-                )
-        except Exception as e:
-            logger.error(f"Could not send premium expiry notice to user {user_id}: {e}")
+def run_web_server():
+    port = int(os.getenv("PORT", 10000))
+    web_app.run(host="0.0.0.0", port=port)
 
 
 def main():
     if not TELEGRAM_BOT_TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN is missing in environment variables!")
+        logger.error("TELEGRAM_BOT_TOKEN is missing!")
         return
+
+    # Start Flask Web Server for Render Port Binding
+    server_thread = Thread(target=run_web_server, daemon=True)
+    server_thread.start()
+    logger.info("Render health check web server started.")
 
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # Register error handler (Feature 7)
     app.add_error_handler(global_error_handler)
 
-    # Register handlers
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("add_channel", add_channel_command))
+    app.add_handler(CommandHandler("add_link", add_link_command))
     app.add_handler(CommandHandler("list_channel", list_channel_command))
     app.add_handler(CommandHandler("settings", settings_command))
     app.add_handler(CommandHandler("stats", stats_command))
@@ -1489,17 +1058,14 @@ def main():
     app.add_handler(CommandHandler("plan", plan_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
-    app.add_handler(CommandHandler("backup", backup_command))      # Feature 3
-    app.add_handler(CommandHandler("broadcast", broadcast_command)) # Feature 11
-    app.add_handler(CommandHandler("language", language_command))   # Feature 6
+    app.add_handler(CommandHandler("backup", backup_command))
+    app.add_handler(CommandHandler("broadcast", broadcast_command))
+    app.add_handler(CommandHandler("language", language_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(ChatJoinRequestHandler(chat_join_request_handler))
 
-    if app.job_queue:
-        app.job_queue.run_repeating(background_expiry_checker, interval=3600, first=10)
-
-    print("Bot is running with MongoDB backend, all 11 features successfully integrated...")
+    print("Bot is running with full features and Render health port active...")
     app.run_polling()
 
 
