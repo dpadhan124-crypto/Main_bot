@@ -968,7 +968,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /stats - Account status\n"
         "• /about - About bot information\n"
         "• /language - Toggle language\n"
-        "• /help - Help guide"
+        "• /help - Help guide\n"
         "• /cancel - Cancel any current process"
         "</blockquote>"
     )
@@ -1091,7 +1091,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(message_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
             return
 
-    start_url = bot_settings.get("start_media_url", "https://ibb.co/ynTDh3tn")
+    start_url = bot_settings.get("start_media_url", "https://files.catbox.moe/aqak0m.jpg")
     await update.message.reply_photo(photo=start_url, caption=tr(user_id, "welcome"), parse_mode="HTML")
 
 
