@@ -972,6 +972,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /cancel - Cancel any current process"
         "</blockquote>"
     )
+    
 
     if is_admin:
         admin_help = (
