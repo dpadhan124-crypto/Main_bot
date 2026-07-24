@@ -38,6 +38,9 @@ ADMIN_IDS = [int(admin_id.strip()) for admin_id in os.getenv("ADMIN_IDS", "83231
 AROLINKS_API_TOKEN = os.getenv("AROLINKS_API_TOKEN", "9dd2d9a7855be5078a54d5a9a2493fb195162b5e")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
+# Video Tutorial Default Configuration Link
+DEFAULT_VIDEO_TUTORIAL_URL = os.getenv("VIDEO_TUTORIAL_URL", "https://t.me/your_video_tutorial_channel")
+
 # MongoDB Configuration
 MONGO_URI = os.getenv("MONGO_URI", "")
 client = MongoClient(MONGO_URI)
@@ -54,6 +57,7 @@ if settings_collection.count_documents({"_id": "bot_settings"}) == 0:
         "_id": "bot_settings",
         "admins": ADMIN_IDS,
         "more_channel_link": "https://t.me/your_more_channel/",
+        "video_tutorial_link": DEFAULT_VIDEO_TUTORIAL_URL,
         "force_subscribe_ids": [],
         "prices": {
             "1": "49",
@@ -87,6 +91,7 @@ def get_settings():
         return {
             "admins": ADMIN_IDS,
             "more_channel_link": "https://t.me/your_more_channel/",
+            "video_tutorial_link": DEFAULT_VIDEO_TUTORIAL_URL,
             "force_subscribe_ids": [],
             "prices": {"1": "49", "2": "95", "3": "140"},
             "start_media_url": "https://ibb.co/ynTDh3tn",
@@ -309,6 +314,7 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚙️ <b>𝐂𝐔𝐑𝐑𝐄𝐍𝐓 𝐒𝐄𝐓𝐓𝐈𝐍𝐆𝐒</b>\n\n"
         f"<b>Admins:</b> {admins_str}\n"
         f"<b>More channel link:</b> {bot_settings['more_channel_link']}\n"
+        f"<b>Video tutorial link:</b> {bot_settings.get('video_tutorial_link', DEFAULT_VIDEO_TUTORIAL_URL)}\n"
         f"<b>Force subscribe ids:</b> {fs_ids}\n"
         f"<b>Prices:</b> {bot_settings['prices']}\n"
         f"<b>Start Media URL:</b> {bot_settings.get('start_media_url', 'Default')}\n"
@@ -604,10 +610,30 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                         elif line.lower().startswith("more info:"):
                             more_info = line.split(":", 1)[1].strip()
 
+                    try:
+                        chat_member = await context.bot.get_chat_member(ch_id, context.bot.id)
+                        is_bot_admin = chat_member.status in ["administrator", "creator"] or chat_member.can_promote_members
+                    except Exception:
+                        is_bot_admin = False
+
+                    if not is_bot_admin:
+                        add_bot_btn = [[InlineKeyboardButton("➕ Add Bot as Admin", url=f"https://t.me/{BOT_USERNAME}?startgroup=true")]]
+                        await update.message.reply_text(
+                            "⚠️ <b>Bot is not an admin in this channel!</b>\nPlease promote the bot to an administrator in the channel first, then try adding it again.",
+                            parse_mode="HTML",
+                            reply_markup=InlineKeyboardMarkup(add_bot_btn)
+                        )
+                        return
+
                     chat_info = await context.bot.get_chat(ch_id)
                     ch_name = chat_info.title or f"Channel {ch_id}"
                     start_token = generate_dps_token()
-                    start_link = f"https://t.me/{BOT_USERNAME}?start={start_token}"
+                    
+                    try:
+                        invite = await context.bot.create_chat_invite_link(chat_id=ch_id, name=f"Channel Link {ch_name}")
+                        start_link = invite.invite_link
+                    except Exception:
+                        start_link = chat_info.invite_link or f"https://t.me/{BOT_USERNAME}?start={start_token}"
 
                     channels_collection.insert_one({
                         "id": ch_id,
@@ -620,7 +646,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     })
 
                     del PENDING_ADMIN_ACTIONS[user_id]
-                    await update.message.reply_text(f"✅ Channel <b>{ch_name}</b> added successfully!", parse_mode="HTML")
+                    await update.message.reply_text(f"✅ Channel <b>{ch_name}</b> added successfully with programmatic join link generation!", parse_mode="HTML")
                     return
                 except Exception as e:
                     await update.message.reply_text(f"❌ Error parsing format: {e}")
@@ -769,6 +795,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 try:
                     lines = text.split("\n")
                     new_more_link = bot_settings["more_channel_link"]
+                    new_video_link = bot_settings.get("video_tutorial_link", DEFAULT_VIDEO_TUTORIAL_URL)
                     new_start_url = bot_settings.get("start_media_url", "")
                     new_qr_url = bot_settings.get("qr_image_url", "")
                     new_verify_url = bot_settings.get("verify_banner_url", "")
@@ -783,6 +810,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
                         if "more channel link" in key_l:
                             new_more_link = val_s
+                        elif "video tutorial link" in key_l:
+                            new_video_link = val_s
                         elif "start media url" in key_l:
                             new_start_url = val_s
                         elif "qr/pay image url" in key_l or "qr image url" in key_l:
@@ -798,6 +827,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
                     update_settings({
                         "more_channel_link": new_more_link,
+                        "video_tutorial_link": new_video_link,
                         "start_media_url": new_start_url,
                         "qr_image_url": new_qr_url,
                         "verify_banner_url": new_verify_url,
@@ -805,7 +835,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     })
 
                     del PENDING_ADMIN_ACTIONS[user_id]
-                    await update.message.reply_text("✅ Settings and image URLs updated successfully!")
+                    await update.message.reply_text("✅ Settings, video tutorial link, and image URLs updated successfully!")
                     return
                 except Exception as e:
                     await update.message.reply_text(f"❌ Error updating settings: {e}")
@@ -825,7 +855,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await render_user_list_page(update, context, edit_message=False)
                 return
 
-    # Track user info on message interaction
     user = update.effective_user
     if user:
         users_collection.update_one(
@@ -937,6 +966,43 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("🔒 <b>Access Denied:</b> Premium subscription required.", parse_mode="HTML")
                 return
 
+            if c_type in ["free", "verify"] and not is_user_premium:
+                if not VERIFICATION_STATE.get((user_id, token), False):
+                    destination_url = f"https://t.me/{BOT_USERNAME}?start={token}"
+                    shortened_link = destination_url
+                    try:
+                        api_url = f"https://arolinks.com/api?api={AROLINKS_API_TOKEN}&url={destination_url}"
+                        response = requests.get(api_url, timeout=5)
+                        data = response.json()
+                        if data.get("status") == "success" or "shortenedUrl" in data:
+                            shortened_link = data.get("shortenedUrl", data.get("url", destination_url))
+                    except Exception as e:
+                        logger.error(f"Arolinks API request failed: {e}")
+
+                    VERIFICATION_STATE[(user_id, token)] = False
+                    
+                    verify_text = (
+                        "🛡️ <b>𝚅𝚎𝚛𝚒𝚏𝚒𝚌𝚊𝚝𝚒𝚘𝚗 𝚁𝚎𝚚𝚞𝚒𝚛𝚎𝚍</b>\n\n"
+                        "Please complete the shortener verification link below to unlock access, or buy premium to bypass verification completely!\n\n"
+                        "💎 <i>Buy Premium via /plan to skip verification.</i>"
+                    )
+                    
+                    tutorial_link = bot_settings.get("video_tutorial_link", DEFAULT_VIDEO_TUTORIAL_URL)
+                    keyboard = [
+                        [InlineKeyboardButton("🔗 Complete Verification", url=shortened_link)],
+                        [InlineKeyboardButton("📺 Watch Video Tutorial", url=tutorial_link)],
+                        [InlineKeyboardButton("✅ I Have Verified", callback_data=f"verify_check_{token}")]
+                    ]
+                    
+                    verify_banner = bot_settings.get("verify_banner_url", "https://files.catbox.moe/rr3cn8.jpg")
+                    await update.message.reply_photo(
+                        photo=verify_banner,
+                        caption=verify_text,
+                        parse_mode="HTML",
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                    return
+
             target_invite_link = matched_item["link"]
             
             users_collection.update_one(
@@ -974,14 +1040,28 @@ async def handle_search_message_logic(update: Update, context: ContextTypes.DEFA
         return
 
     all_channels = list(channels_collection.find({}))
-    channel_names = [ch["name"] for ch in all_channels]
-    fuzzy_results = process.extract(query, channel_names, limit=15, scorer=fuzz.token_sort_ratio)
-    matched_names = {res[0] for res in fuzzy_results if res[1] >= 50}
-    found_items = [ch for ch in all_channels if ch["name"] in matched_names or normalize_text(query) in normalize_text(f"{ch['name']} {ch['category']} {ch['type']}")]
+    norm_query = normalize_text(query)
+
+    # 1. Try exact string match first
+    found_items = [ch for ch in all_channels if norm_query in normalize_text(ch["name"]) or norm_query in normalize_text(ch.get("category", ""))]
+
+    suggestions = []
+    if not found_items:
+        # 2. Fallback to word-by-word search / fuzzy matching
+        channel_names = [ch["name"] for ch in all_channels]
+        fuzzy_results = process.extract(query, channel_names, limit=15, scorer=fuzz.token_sort_ratio)
+        matched_names = {res[0] for res in fuzzy_results if res[1] >= 40}
+        
+        found_items = [ch for ch in all_channels if ch["name"] in matched_names]
+        if not found_items:
+            suggestions = [res[0] for res in fuzzy_results[:3] if res[1] >= 30]
 
     context.user_data["search_query"] = query
     context.user_data["found_items"] = found_items
+    context.user_data["search_suggestions"] = suggestions
     context.user_data["current_page"] = 0
+    context.user_data["active_type_filter"] = None
+    context.user_data["active_cat_filter"] = None
 
     await send_search_results(update, context, edit_message=False)
 
@@ -990,42 +1070,71 @@ async def send_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = context.user_data.get("search_query", "")
     all_channels = list(channels_collection.find({}))
     found_items = context.user_data.get("found_items", all_channels)
-    page = context.user_data.get("current_page", 0)
+    suggestions = context.user_data.get("search_suggestions", [])
+    
+    type_filter = context.user_data.get("active_type_filter")
+    cat_filter = context.user_data.get("active_cat_filter")
 
+    # Apply Filters if active
+    filtered_items = found_items
+    if type_filter:
+        filtered_items = [item for item in filtered_items if item.get("type", "").lower() == type_filter.lower()]
+    if cat_filter:
+        filtered_items = [item for item in filtered_items if item.get("category", "").lower() == cat_filter.lower()]
+
+    page = context.user_data.get("current_page", 0)
     bot_settings = get_settings()
     ITEMS_PER_PAGE = bot_settings.get("items_per_page", 10)
-    max_pages = (len(found_items) - 1) // ITEMS_PER_PAGE if found_items else 0
+    max_pages = (len(filtered_items) - 1) // ITEMS_PER_PAGE if filtered_items else 0
     page = max(0, min(page, max_pages))
     context.user_data["current_page"] = page
 
     start_idx = page * ITEMS_PER_PAGE
     end_idx = start_idx + ITEMS_PER_PAGE
-    current_page_items = found_items[start_idx:end_idx]
+    current_page_items = filtered_items[start_idx:end_idx]
 
     text_lines = [
         "📊 <b>𝐒𝐄𝐀𝐑𝐂𝐇 𝐑𝐄𝐒𝐔𝐋𝐓𝐒</b>",
-        f"▪ 𝐐𝐮𝐞𝐫𝐲: &quot;{query}&quot;",
-        f"▪ 𝐏𝐚𝐠𝐞: {page + 1} of {max_pages + 1}\n",
-        "📌 <b>𝐌𝐀𝐓𝐂𝐇𝐈𝐍𝐆 𝐑𝐄𝐂𝐎𝐑𝐃𝐒:</b>"
+        f"▪ 𝐐𝐮𝐞𝐫𝐲: &quot;{query}&quot;"
     ]
+    if type_filter:
+        text_lines.append(f"▪ 𝐓𝐲𝐩𝐞 𝐅𝐢𝐥𝐭𝐞𝐫: {type_filter.capitalize()}")
+    if cat_filter:
+        text_lines.append(f"▪ 𝐂𝐚𝐭𝐞𝐠𝐨𝐫𝐲 𝐅𝐢𝐥𝐭𝐞𝐫: {cat_filter}")
 
-    for idx, item in enumerate(current_page_items, start=start_idx + 1):
-        dist_link = item.get("link", "#")
-        text_lines.append(f"<b>{idx}.</b> <a href='{dist_link}'>{item['name']}</a> [{item['type'].upper()}]")
+    text_lines.append(f"▪ 𝐏𝐚𝐠𝐞: {page + 1} of {max_pages + 1 if max_pages >= 0 else 1}\n")
+    
+    if current_page_items:
+        text_lines.append("📌 <b>𝐌𝐀𝐓𝐂𝐇𝐈𝐍𝐆 𝐑𝐄𝐂𝐎𝐑𝐃𝐒:</b>")
+        for idx, item in enumerate(current_page_items, start=start_idx + 1):
+            dist_link = item.get("link", "#")
+            text_lines.append(f"<b>{idx}.</b> <a href='{dist_link}'>{item['name']}</a> [{item['type'].upper()}] - 📂 {item.get('category', 'General')}")
+    else:
+        text_lines.append("❌ <i>No matching records found for your query.</i>")
+        if suggestions:
+            text_lines.append("\n💡 <b>Did you mean:</b>")
+            for sug in suggestions:
+                text_lines.append(f"• <code>{sug}</code>")
 
     response_text = "\n".join(text_lines)
+
+    # Dynamic Buttons including Category & Type filters
     keyboard = [
         [
-            InlineKeyboardButton("🟢 Free", callback_data="filter_type_free"),
-            InlineKeyboardButton("🟡 Verify", callback_data="filter_type_verify"),
-            InlineKeyboardButton("🟣 Premium", callback_data="filter_type_premium"),
+            InlineKeyboardButton("Free", callback_data="filter_type_free"),
+            InlineKeyboardButton("Verify", callback_data="filter_type_verify"),
+            InlineKeyboardButton("Premium", callback_data="filter_type_premium"),
+        ],
+        [
+            InlineKeyboardButton("🏷️ Filter by Category", callback_data="prompt_category_filter"),
+            InlineKeyboardButton("🔄 Reset Filters", callback_data="filter_reset")
         ]
     ]
 
     nav_row = []
     if page > 0:
         nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data="prev_page"))
-    if end_idx < len(found_items):
+    if end_idx < len(filtered_items):
         nav_row.append(InlineKeyboardButton("Next ➡️", callback_data="next_page"))
     if nav_row:
         keyboard.append(nav_row)
@@ -1121,6 +1230,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         PENDING_ADMIN_ACTIONS[user_id] = "awaiting_settings_edit"
         edit_template = (
             f"More channel link: {bot_settings['more_channel_link']}\n"
+            f"Video tutorial link: {bot_settings.get('video_tutorial_link', DEFAULT_VIDEO_TUTORIAL_URL)}\n"
             f"Start Media URL: {bot_settings.get('start_media_url', '')}\n"
             f"QR/Pay Image URL: {bot_settings.get('qr_image_url', '')}\n"
             f"Verify Banner URL: {bot_settings.get('verify_banner_url', '')}\n"
@@ -1129,6 +1239,73 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"3 month price: {bot_settings['prices']['3']}"
         )
         await query.message.reply_text("✏️ Edit settings and send back:\n\n" + f"<code>{edit_template}</code>", parse_mode="HTML")
+        return
+
+    if data.startswith("verify_check_"):
+        token = data.replace("verify_check_", "")
+        VERIFICATION_STATE[(user_id, token)] = True
+        
+        matched_item = channels_collection.find_one({"token": token})
+        if not matched_item:
+            await query.message.reply_text("❌ Item session expired. Please send /start again.")
+            return
+
+        channel_id = matched_item["id"]
+        target_invite_link = matched_item["link"]
+        try:
+            invite = await context.bot.create_chat_invite_link(chat_id=channel_id, name=f"Verified User {user_id}")
+            target_invite_link = invite.invite_link
+        except Exception as e:
+            logger.error(f"Failed to generate invite link after verification: {e}")
+
+        message_text = (
+            "✅ <b>Verification Successful!</b>\n\n"
+            "📂 <b>𝙲𝚑𝚊𝚗𝚗𝚎𝚕 𝙳𝚎𝚝𝚊𝚒𝚕𝚜</b>\n\n"
+            "<blockquote>"
+            f"<b>𝙽𝚊𝚖𝚎:</b> {matched_item['name']}\n"
+            f"<b>𝚃𝚢𝚙𝚎:</b> {matched_item['type'].capitalize()}\n"
+            f"<b>𝙲𝚊𝚝𝚎𝚐𝚘𝚛𝚢:</b> {matched_item['category']}\n"
+            "<b>Access Duration:</b> 7 Days\n"
+            "</blockquote>"
+        )
+        keyboard = [[InlineKeyboardButton("𝙹𝚘𝚒𝚗 𝙲𝚑𝚊𝚗𝚗𝚎𝚕", url=target_invite_link)]]
+        await query.edit_message_text(text=message_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    # Filter Action Handlers
+    if data.startswith("filter_type_"):
+        context.user_data["active_type_filter"] = data.replace("filter_type_", "")
+        context.user_data["current_page"] = 0
+        await send_search_results(update, context, edit_message=True)
+        return
+
+    if data == "prompt_category_filter":
+        all_channels = list(channels_collection.find({}))
+        categories = list(set(ch.get("category", "General") for ch in all_channels if ch.get("category")))
+        
+        cat_keyboard = []
+        for cat in categories:
+            cat_keyboard.append([InlineKeyboardButton(f"📁 {cat}", callback_data=f"set_cat_{cat}")])
+        cat_keyboard.append([InlineKeyboardButton("🔙 Back to Results", callback_data="back_to_search_results")])
+        
+        await query.edit_message_text("📂 <b>Select a category to filter by:</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(cat_keyboard))
+        return
+
+    if data.startswith("set_cat_"):
+        context.user_data["active_cat_filter"] = data.replace("set_cat_", "")
+        context.user_data["current_page"] = 0
+        await send_search_results(update, context, edit_message=True)
+        return
+
+    if data == "back_to_search_results":
+        await send_search_results(update, context, edit_message=True)
+        return
+
+    if data == "filter_reset":
+        context.user_data["active_type_filter"] = None
+        context.user_data["active_cat_filter"] = None
+        context.user_data["current_page"] = 0
+        await send_search_results(update, context, edit_message=True)
         return
 
     if data == "next_page":
@@ -1150,10 +1327,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["user_list_page"] -= 1
         await render_user_list_page(update, context, edit_message=True)
     elif data == "ch_search_prompt":
-        PENDING_ADMIN_ACTIONS[user_id] = "awaiting_ch_search_query"
+        PENDING_ADMIN_ACTIONS[update.effective_user.id] = "awaiting_ch_search_query"
         await query.message.reply_text("🔍 Send channel keyword filter:")
     elif data == "usr_search_prompt":
-        PENDING_ADMIN_ACTIONS[user_id] = "awaiting_usr_search_query"
+        PENDING_ADMIN_ACTIONS[update.effective_user.id] = "awaiting_usr_search_query"
         await query.message.reply_text("🔍 Send user ID/Name filter:")
 
 
@@ -1174,7 +1351,6 @@ def main():
         logger.error("TELEGRAM_BOT_TOKEN is missing!")
         return
 
-    # Start Flask Web Server for Render Port Binding
     server_thread = Thread(target=run_web_server, daemon=True)
     server_thread.start()
     logger.info("Render health check web server started.")
@@ -1207,4 +1383,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
