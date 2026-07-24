@@ -4,3 +4,4 @@ requests>=2.31.0
 python-dotenv>=1.0.0
 thefuzz>=0.22.1
 fuzzywuzzy>=0.18.0
+flask>=3.0.0
