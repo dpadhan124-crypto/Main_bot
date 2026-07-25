@@ -65,7 +65,7 @@ if settings_collection.count_documents({"_id": "bot_settings"}) == 0:
             "2": "95",
             "3": "140"
         },
-        "start_media_url": "https://i.ibb.co/h1KnJtCh/x.jpg",
+        "start_media_url": "https://files.catbox.moe/aqak0m.jpg",
         "qr_image_url": "https://files.catbox.moe/68r9do.jpg",
         "verify_banner_url": "https://files.catbox.moe/rr3cn8.jpg",
         "about_message": "✨ <b>Welcome to our Bot!</b>\n\nWe provide high-quality digital resources, instant updates, and secure content access channels. Upgrade to Premium to enjoy zero restrictions and direct links!",
@@ -96,7 +96,7 @@ def get_settings():
             "video_tutorial_link": DEFAULT_VIDEO_TUTORIAL_URL,
             "force_subscribe_ids": [],
             "prices": {"1": "49", "2": "95", "3": "140"},
-            "start_media_url": "https://i.ibb.co/h1KnJtCh/x.jpg",
+            "start_media_url": "https://files.catbox.moe/aqak0m.jpg",
             "qr_image_url": "https://files.catbox.moe/68r9do.jpg",
             "verify_banner_url": "https://files.catbox.moe/rr3cn8.jpg",
             "about_message": "✨ <b>Welcome to our Bot!</b>\n\nWe provide high-quality digital resources, instant updates, and secure content access channels. Upgrade to Premium to enjoy zero restrictions and direct links!",
@@ -960,7 +960,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /cancel - Cancel any current process"
         "</blockquote>"
     )
-    
 
     if is_admin:
         admin_help = (
@@ -1081,7 +1080,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(message_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
             return
 
-    start_url = bot_settings.get("start_media_url", "https://i.ibb.co/h1KnJtCh/x.jpg")
+    start_url = bot_settings.get("start_media_url", "https://files.catbox.moe/aqak0m.jpg")
     await update.message.reply_photo(photo=start_url, caption=tr(user_id, "welcome", user_name=user_name), parse_mode="HTML")
 
 
@@ -1168,14 +1167,14 @@ async def send_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     text_lines = [
         "📊 <b>𝐒𝐄𝐀𝐑𝐂𝐇 & 𝐁𝐑𝐎𝐖𝐒𝐄 𝐀𝐍𝐀𝐋𝐘𝐓𝐈𝐂𝐒</b>" if not category_browse_mode else "📁 <b>𝐂𝐀𝐓𝐄𝐆𝐎𝐑𝐘 𝐁𝐑𝐎𝐖𝐒𝐄𝐑</b>",
-        "──────────────────────────",
+        "───────────────────",
         "<blockquote>"
         f"▪ 𝐓𝐨𝐭𝐚𝐥 𝐈𝐭𝐞𝐦𝐬         : {total_items:,}\n"
         f"▪ 𝐌𝐚𝐭𝐜𝐡𝐞𝐬 𝐅𝐨𝐮𝐧𝐝  : {found_count:,}\n"
         f"▪ 𝐐𝐮𝐞𝐫𝐲/𝐂𝐚𝐭        : &quot;{cat_filter if category_browse_mode and cat_filter else query}&quot;\n"
         f"▪ 𝐍𝐚𝐯𝐢𝐠𝐚𝐭𝐢𝐨𝐧          : 𝐏𝐚𝐠𝐞 {page + 1} of {max_pages + 1 if max_pages >= 0 else 1}"
         "</blockquote>",
-        "──────────────────────────",
+        "───────────────────",
         "📌 <b>𝐑𝐄𝐂𝐎𝐑𝐃𝐒:</b>",
     ]
 
@@ -1203,22 +1202,25 @@ async def send_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE
                 more_link = bot_settings.get("more_channel_link", "https://t.me/")
 
             cats_display = ", ".join(item.get("categories", [item.get("category", "General")]))
-            text_lines.append(
-                f"<blockquote>{idx}. <a href=\"{access_link}\">{item['name']}</a> [{item['type'].upper()}] - ({cats_display})\n"
-                f"   /n<a href=\"{more_link}\">More Info</a></blockquote>"
-            )
+        Text_lines.append(
+    f"<blockquote>"
+    f"<b>{idx}. {item['name']}</b>\n"
+    f"<a href=\"{access_link}\">[🔗 𝑨𝒄𝒄𝒆𝒔𝒔 𝑳𝒊𝒏𝒌]</a> «||» <a href=\"{more_link}\">[ℹ️ 𝑴𝒐𝒓𝒆 𝑰𝒏𝒇𝒐]</a>"
+    f"</blockquote>"
+)
+
 
     response_text = "\n".join(text_lines)
 
     keyboard = [
         [
-            InlineKeyboardButton("ⓕ Free", callback_data="filter_type_free"),
-            InlineKeyboardButton("ⓥ Verify", callback_data="filter_type_verify"),
-            InlineKeyboardButton("ⓟ Premium", callback_data="filter_type_premium"),
+            InlineKeyboardButton("ⓕ 𝔽𝕣𝕖𝕖", callback_data="filter_type_free"),
+            InlineKeyboardButton("ⓥ 𝕍𝕖𝕣𝕚𝕗𝕪", callback_data="filter_type_verify"),
+            InlineKeyboardButton("ⓟ 𝕡𝕣𝕖𝕞𝕚𝕦𝕞", callback_data="filter_type_premium"),
         ],
         [
-            InlineKeyboardButton("🗂️ Category", callback_data="prompt_category_filter"),
-            InlineKeyboardButton("🔁 Filters", callback_data="filter_reset")
+            InlineKeyboardButton("💫 𝙵𝚒𝚕𝚝𝚎𝚜", callback_data="prompt_category_filter"),
+            InlineKeyboardButton("🗂️ 𝙲𝚊𝚝𝚎𝚐𝚘𝚛𝚢", callback_data="filter")
         ]
     ]
 
@@ -1369,14 +1371,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "prompt_category_filter":
-        all_channels = list(channels_collection.find({}))
+        # 💫 Filters button: lists categories strictly derived from current search results / found items, NOT the entire database
         extracted_cats = set()
-        
-        category_browse_mode = context.user_data.get("category_browse_mode", False)
-        
-        target_source = all_channels
-        if not category_browse_mode and context.user_data.get("found_items"):
-            target_source = context.user_data.get("found_items")
+        target_source = context.user_data.get("found_items", [])
 
         for ch in target_source:
             cats = ch.get("categories", [ch.get("category", "General")])
@@ -1390,17 +1387,17 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cat_keyboard.append([InlineKeyboardButton(f"📁 {cat}", callback_data=f"set_cat_{cat}")])
         cat_keyboard.append([InlineKeyboardButton("🔙 Back to Results", callback_data="back_to_search_results")])
         
-        await query.edit_message_text("📂 <b>Select a category to filter/browse by:</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(cat_keyboard))
+        await query.edit_message_text("📂 <b>Select a category from search results:</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(cat_keyboard))
         return
 
     if data.startswith("set_cat_"):
         cat_val = data.replace("set_cat_", "")
         if cat_val == "all":
             context.user_data["active_cat_filter"] = None
-            context.user_data["category_browse_mode"] = False
         else:
             context.user_data["active_cat_filter"] = cat_val
         context.user_data["current_page"] = 0
+        context.user_data["category_browse_mode"] = True
         await send_search_results(update, context, edit_message=True)
         return
 
@@ -1409,11 +1406,29 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_search_results(update, context, edit_message=True)
         return
 
-    if data == "filter_reset":
-        if "found_items" in context.user_data:
-            context.user_data["found_items"] = context.user_data.get("found_items", [])
-        context.user_data["current_page"] = 0
-        await send_search_results(update, context, edit_message=True)
+    if data == "filter":
+        # 🗂️ Category button: extracts categories from the ENTIRE database
+        extracted_cats = set()
+        all_channels = list(channels_collection.find({}))
+
+        for ch in all_channels:
+            cats = ch.get("categories", [ch.get("category", "General")])
+            for c in cats:
+                if c:
+                    extracted_cats.add(c.strip())
+        categories = sorted(list(extracted_cats))
+        
+        cat_keyboard = [[InlineKeyboardButton("📁 All Categories (Global)", callback_data="set_cat_all")]]
+        for cat in categories:
+            cat_keyboard.append([InlineKeyboardButton(f"📁 {cat}", callback_data=f"set_cat_{cat}")])
+        cat_keyboard.append([InlineKeyboardButton("🔙 Back to Results", callback_data="back_to_search_results")])
+        
+        context.user_data["category_browse_mode"] = True
+        await query.edit_message_text(
+            "📂 <b>Select a category from the entire database:</b>", 
+            parse_mode="HTML", 
+            reply_markup=InlineKeyboardMarkup(cat_keyboard)
+        )
         return
 
     if data.startswith("usr_filter_"):
