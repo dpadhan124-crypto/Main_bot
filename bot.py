@@ -1202,7 +1202,7 @@ async def send_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE
                 more_link = bot_settings.get("more_channel_link", "https://t.me/")
 
             cats_display = ", ".join(item.get("categories", [item.get("category", "General")]))
-        Text_lines.append(
+            text_lines.append(
     f"<blockquote>"
     f"<b>{idx}. {item['name']}</b>\n"
     f"<a href=\"{access_link}\">[🔗 𝑨𝒄𝒄𝒆𝒔𝒔 𝑳𝒊𝒏𝒌]</a> «||» <a href=\"{more_link}\">[ℹ️ 𝑴𝒐𝒓𝒆 𝑰𝒏𝒇𝒐]</a>"
