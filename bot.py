@@ -123,12 +123,12 @@ def normalize_text(text: str) -> str:
 
 LOCALIZATION_STRINGS = {
     "en": {
-        "welcome": "👋 Hello and Welcome!\n</b>, and welcome to <b>DPS Stories</b>!\n✨ <i>Your ultimate gateway to fast, secure, and organized digital resources.</i>\n\n<blockquote>───────────────────\n📌 <b>What you can do here:</b>\n• 🔍 <b>Instant Search:</b> Send any keyword or phrase to quickly find what you're looking for.\n• 📁 <b>Category Browsing:</b> Filter content effortlessly by your favorite categories.\n• 💎 <b>Premium Access:</b> Upgrade to enjoy zero restrictions and direct link unlocks.\n───────────────────</blockquote>\n\n💡 <i>To get started, simply type your search query below or explore our options using the buttons!</i>",
+        "welcome": "👋 Hello <b>{user_name}</b>, and welcome to <b>DPS Stories</b>!\n✨ <i>Your ultimate gateway to fast, secure, and organized digital resources.</i>\n\n<blockquote><b>What you can do here:</b>\n• 🔍 <b>Instant Search:</b>.\n• 📁 <b>Category Browsing:</b>.\n• 💎 <b>Premium Access:</b></blockquote>\n💡 <i>To get started, simply type your search query below !</i>",
         "maintenance": "🛠️ Bot is currently under maintenance. Please check back later!",
         "unauthorized": "⛔ You are not authorized to use this command."
     },
     "hi": {
-        "welcome": "👋 Hello and Welcome!\n<b>DPS Stories</b> में आपका स्वागत है!\n✨ <i>तेज़, सुरक्षित और संगठित डिजिटल संसाधनों के लिए आपका अंतिम प्रवेश द्वार।</i>\n\n<blockquote>───────────────────\n📌 <b>आप यहां क्या कर सकते हैं</b>\n• 🔍 <b>Instant Search:</b> आप जो खोज रहे हैं उसे तुरंत खोजने के लिए कोई भी कीवर्ड या वाक्यांश भेजें।\n• 📁 <b>Category Browsing:</b> अपनी पसंदीदा श्रेणियों द्वारा सामग्री को आसानी से फ़िल्टर करें।\n• 💎 <b>Premium Access:</b> शून्य प्रतिबंधों का आनंद लेने के लिए अपग्रेड करें और सीधा लिंक अनलॉक करें।\n───────────────────</blockquote>\n\n💡 <i>आरंभ करने के लिए, बस नीचे अपनी खोज क्वेरी टाइप करें या बटनों का उपयोग करके हमारे विकल्पों का अन्वेषण करें!</i>",
+        "welcome": "👋 Hello <b>{user_name}</b>, <b>DPS Stories</b> में आपका स्वागत है!\n✨ <i>तेज़, सुरक्षित और संगठित डिजिटल संसाधनों कि हव। </i>\n\n<blockquote>📌 <b>आप यहां क्या कर सकते हैं</b>\n•🔍 <b>Instant Search:</b>.\n• 📁 <b>Category Browsing:</b>.\n• 💎 <b>Premium Access:</b></blockquote>\n💡 <i>आरंभ करने के लिए, बस नीचे अपनी खोज क्वेरी टाइप करें !</i>",
         "maintenance": "🛠️ बॉट वर्तमान में रखरखाव के अधीन है। कृपया बाद में जाँच करें!",
         "unauthorized": "⛔ आप इस कमांड का उपयोग करने के लिए अधिकृत नहीं हैं."
     }
@@ -140,9 +140,12 @@ def get_user_language(user_id: int) -> str:
         return user["language"]
     return "en"
 
-def tr(user_id: int, key: str) -> str:
+def tr(user_id: int, key: str, user_name: str = "User") -> str:
     lang = get_user_language(user_id)
-    return LOCALIZATION_STRINGS.get(lang, LOCALIZATION_STRINGS["en"]).get(key, LOCALIZATION_STRINGS["en"].get(key, key))
+    template = LOCALIZATION_STRINGS.get(lang, LOCALIZATION_STRINGS["en"]).get(key, LOCALIZATION_STRINGS["en"].get(key, key))
+    if key == "welcome":
+        return template.format(user_name=user_name, bot_name="DPS Stories")
+    return template
 
 
 async def rate_limit_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -323,9 +326,6 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>Video tutorial link:</b> {bot_settings.get('video_tutorial_link', DEFAULT_VIDEO_TUTORIAL_URL)}\n"
         f"<b>Force subscribe ids:</b> {fs_ids}\n"
         f"<b>Prices:</b> {bot_settings['prices']}\n"
-        f"<b>Start Media URL:</b> {bot_settings.get('start_media_url', 'Default')}\n"
-        f"<b>QR/Pay Image URL:</b> {bot_settings.get('qr_image_url', 'Default')}\n"
-        f"<b>Verify Banner URL:</b> {bot_settings.get('verify_banner_url', 'Default')}\n"
         f"<b>About Message:</b> Configured\n"
         f"<b>Maintenance Mode:</b> {bot_settings.get('maintenance_mode', False)}"
         "</blockquote>"
@@ -843,9 +843,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     lines = text.split("\n")
                     new_more_link = bot_settings["more_channel_link"]
                     new_video_link = bot_settings.get("video_tutorial_link", DEFAULT_VIDEO_TUTORIAL_URL)
-                    new_start_url = bot_settings.get("start_media_url", "")
-                    new_qr_url = bot_settings.get("qr_image_url", "")
-                    new_verify_url = bot_settings.get("verify_banner_url", "")
                     new_about_msg = bot_settings.get("about_message", "")
                     new_prices = bot_settings["prices"].copy()
 
@@ -853,14 +850,11 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     current_val_lines = []
 
                     for line in lines:
-                        if ":" in line and any(line.lower().startswith(p) for p in ["more channel link", "video tutorial link", "start media url", "qr/pay image url", "qr image url", "verify banner url", "about message", "1 month price", "2 month price", "3 month price"]):
+                        if ":" in line and any(line.lower().startswith(p) for p in ["more channel link", "video tutorial link", "about message", "1 month price", "2 month price", "3 month price"]):
                             if current_key:
                                 val_s = "\n".join(current_val_lines).strip()
                                 if current_key == "more channel link": new_more_link = val_s
                                 elif current_key == "video tutorial link": new_video_link = val_s
-                                elif current_key == "start media url": new_start_url = val_s
-                                elif current_key in ["qr/pay image url", "qr image url"]: new_qr_url = val_s
-                                elif current_key == "verify banner url": new_verify_url = val_s
                                 elif current_key == "about message": new_about_msg = val_s
                                 elif current_key == "1 month price": new_prices["1"] = val_s
                                 elif current_key == "2 month price": new_prices["2"] = val_s
@@ -876,9 +870,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                         val_s = "\n".join(current_val_lines).strip()
                         if current_key == "more channel link": new_more_link = val_s
                         elif current_key == "video tutorial link": new_video_link = val_s
-                        elif current_key == "start media url": new_start_url = val_s
-                        elif current_key in ["qr/pay image url", "qr image url"]: new_qr_url = val_s
-                        elif current_key == "verify banner url": new_verify_url = val_s
                         elif current_key == "about message": new_about_msg = val_s
                         elif current_key == "1 month price": new_prices["1"] = val_s
                         elif current_key == "2 month price": new_prices["2"] = val_s
@@ -887,9 +878,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     update_settings({
                         "more_channel_link": new_more_link,
                         "video_tutorial_link": new_video_link,
-                        "start_media_url": new_start_url,
-                        "qr_image_url": new_qr_url,
-                        "verify_banner_url": new_verify_url,
                         "about_message": new_about_msg,
                         "prices": new_prices
                     })
@@ -981,7 +969,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• /add_channel - Add Telegram channel\n"
             "• /add_link - Add distribution link\n"
             "• /list_channel - Manage channels\n"
-            "• /settings - Bot configuration (Images & Prices)\n"
+            "• /settings - Bot configuration (Prices)\n"
             "• /backup - Database backup\n"
             "• /broadcast - Broadcast message\n"
             "• /add_user - Grant user validity\n"
@@ -1001,6 +989,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.effective_user
     user_id = user.id
+    user_name = user.first_name or "User"
     
     users_collection.update_one(
         {"user_id": user_id},
@@ -1093,7 +1082,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     start_url = bot_settings.get("start_media_url", "https://i.ibb.co/h1KnJtCh/x.jpg")
-    await update.message.reply_photo(photo=start_url, caption=tr(user_id, "welcome"), parse_mode="HTML")
+    await update.message.reply_photo(photo=start_url, caption=tr(user_id, "welcome", user_name=user_name), parse_mode="HTML")
 
 
 async def chat_join_request_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1334,9 +1323,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         edit_template = (
             f"More channel link: {bot_settings['more_channel_link']}\n"
             f"Video tutorial link: {bot_settings.get('video_tutorial_link', DEFAULT_VIDEO_TUTORIAL_URL)}\n"
-            f"Start Media URL: {bot_settings.get('start_media_url', '')}\n"
-            f"QR/Pay Image URL: {bot_settings.get('qr_image_url', '')}\n"
-            f"Verify Banner URL: {bot_settings.get('verify_banner_url', '')}\n"
             f"About Message: {bot_settings.get('about_message', '')}\n"
             f"1 month price: {bot_settings['prices']['1']}\n"
             f"2 month price: {bot_settings['prices']['2']}\n"
@@ -1424,7 +1410,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "filter_reset":
-        # Scoped exclusively to current search items list (no database reset)
         if "found_items" in context.user_data:
             context.user_data["found_items"] = context.user_data.get("found_items", [])
         context.user_data["current_page"] = 0
