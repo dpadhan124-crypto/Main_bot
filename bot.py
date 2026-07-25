@@ -1014,64 +1014,76 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if matched_item:
             channel_id = matched_item["id"]
             c_type = matched_item["type"]
+            ch_name = matched_item["name"]
 
             user_record = users_collection.find_one({"user_id": user_id})
             is_admin = user_id in bot_settings["admins"] or user_id in ADMIN_IDS
             now = datetime.now()
             is_user_premium = is_admin or (user_record and user_record.get("expiry") and user_record["expiry"] > now)
 
-            if c_type == "premium" and not is_user_premium:
-                await update.message.reply_text("🔒 <b>Access Denied:</b> Premium subscription required.", parse_mode="HTML")
-                return
+            # Check if user has already joined/interacted with this channel previously
+            user_joined_list = user_record.get("joined_channels", []) if user_record else []
+            already_joined = ch_name in user_joined_list
 
-            if c_type in ["free", "verify"] and not is_user_premium:
-                if not VERIFICATION_STATE.get((user_id, token), False):
-                    destination_url = f"https://t.me/{BOT_USERNAME}?start={token}"
-                    shortened_link = destination_url
-                    try:
-                        api_url = f"https://arolinks.com/api?api={AROLINKS_API_TOKEN}&url={destination_url}"
-                        response = requests.get(api_url, timeout=5)
-                        data = response.json()
-                        if data.get("status") == "success" or "shortenedUrl" in data:
-                            shortened_link = data.get("shortenedUrl", data.get("url", destination_url))
-                    except Exception as e:
-                        logger.error(f"Arolinks API request failed: {e}")
-
-                    VERIFICATION_STATE[(user_id, token)] = False
-                    
-                    verify_text = (
-                        "🛡️ <b>𝚅𝚎𝚛𝚒𝚏𝚒𝚌𝚊𝚝𝚒𝚘𝚗 𝚁𝚎𝚚𝚞𝚒𝚛𝚎𝚍</b>\n\n"
-                        "<blockquote>Please complete the shortener verification link below to unlock access, or buy premium to bypass verification completely!\n\n"
-                        "💎 <i>Buy Premium via /plan to skip verification.</i></blockquote>"
-                    )
-                    
-                    tutorial_link = bot_settings.get("video_tutorial_link", DEFAULT_VIDEO_TUTORIAL_URL)
-                    keyboard = [
-                        [InlineKeyboardButton("🔗 Complete Verification", url=shortened_link)],
-                        [InlineKeyboardButton("📺 Watch Video Tutorial", url=tutorial_link)],
-                        [InlineKeyboardButton("✅ I Have Verified", callback_data=f"verify_check_{token}")]
-                    ]
-                    
-                    verify_banner = bot_settings.get("verify_banner_url", "https://files.catbox.moe/rr3cn8.jpg")
-                    await update.message.reply_photo(
-                        photo=verify_banner,
-                        caption=verify_text,
-                        parse_mode="HTML",
-                        reply_markup=InlineKeyboardMarkup(keyboard)
-                    )
+            if not already_joined:
+                if c_type == "premium" and not is_user_premium:
+                    await update.message.reply_text("🔒 <b>Access Denied:</b> Premium subscription required.", parse_mode="HTML")
                     return
 
+                if c_type in ["free", "verify"] and not is_user_premium:
+                    if not VERIFICATION_STATE.get((user_id, token), False):
+                        destination_url = f"https://t.me/{BOT_USERNAME}?start={token}"
+                        shortened_link = destination_url
+                        try:
+                            api_url = f"https://arolinks.com/api?api={AROLINKS_API_TOKEN}&url={destination_url}"
+                            response = requests.get(api_url, timeout=5)
+                            data = response.json()
+                            if data.get("status") == "success" or "shortenedUrl" in data:
+                                shortened_link = data.get("shortenedUrl", data.get("url", destination_url))
+                        except Exception as e:
+                            logger.error(f"Arolinks API request failed: {e}")
+
+                        VERIFICATION_STATE[(user_id, token)] = False
+                        
+                        verify_text = (
+                            "🛡️ <b>𝚅𝚎𝚛𝚒𝚏𝚒𝚌𝚊𝚝𝚒𝚘𝚗 𝚁𝚎𝚚𝚞𝚒𝚛𝚎𝚍</b>\n\n"
+                            "<blockquote>Please complete the shortener verification link below to unlock access, or buy premium to bypass verification completely!\n\n"
+                            "💎 <i>Buy Premium via /plan to skip verification.</i></blockquote>"
+                        )
+                        
+                        tutorial_link = bot_settings.get("video_tutorial_link", DEFAULT_VIDEO_TUTORIAL_URL)
+                        keyboard = [
+                            [InlineKeyboardButton("🔗 Complete Verification", url=shortened_link)],
+                            [InlineKeyboardButton("📺 Watch Video Tutorial", url=tutorial_link)],
+                            [InlineKeyboardButton("✅ I Have Verified", callback_data=f"verify_check_{token}")]
+                        ]
+                        
+                        verify_banner = bot_settings.get("verify_banner_url", "https://files.catbox.moe/rr3cn8.jpg")
+                        await update.message.reply_photo(
+                            photo=verify_banner,
+                            caption=verify_text,
+                            parse_mode="HTML",
+                            reply_markup=InlineKeyboardMarkup(keyboard)
+                        )
+                        return
+
             target_invite_link = matched_item["link"]
+            if channel_id != -999999:
+                try:
+                    invite = await context.bot.create_chat_invite_link(chat_id=channel_id, name=f"User {user_id}")
+                    target_invite_link = invite.invite_link
+                except Exception:
+                    pass
             
             users_collection.update_one(
                 {"user_id": user_id},
-                {"$addToSet": {"joined_channels": matched_item["name"]}}
+                {"$addToSet": {"joined_channels": ch_name}}
             )
 
             message_text = (
                 "📂 <b>𝙲𝚑𝚊𝚗𝚗𝚎𝚕 𝙳𝚎𝚝𝚊𝚒𝚕𝚜</b>\n\n"
                 "<blockquote>"
-                f"<b>𝙽𝚊𝚖𝚎:</b> {matched_item['name']}\n"
+                f"<b>𝙽𝚊𝚖𝚎:</b> {ch_name}\n"
                 f"<b>𝚃𝚢𝚙𝚎:</b> {c_type.capitalize()}\n"
                 f"<b>𝙲𝚊𝚝𝚎𝚐𝚘𝚛𝚢:</b> {', '.join(matched_item.get('categories', [matched_item.get('category', 'General')]))}"
                 "</blockquote>"
@@ -1122,7 +1134,6 @@ async def handle_search_message_logic(update: Update, context: ContextTypes.DEFA
     context.user_data["found_items"] = found_items
     context.user_data["search_suggestions"] = suggestions
     context.user_data["current_page"] = 0
-    context.user_data["active_type_filter"] = None
     context.user_data["active_cat_filter"] = None
     context.user_data["category_browse_mode"] = False
 
@@ -1136,7 +1147,6 @@ async def send_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     category_browse_mode = context.user_data.get("category_browse_mode", False)
     cat_filter = context.user_data.get("active_cat_filter")
-    type_filter = context.user_data.get("active_type_filter")
 
     if category_browse_mode and cat_filter:
         filtered_items = []
@@ -1149,8 +1159,6 @@ async def send_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE
         found_items = context.user_data.get("found_items", all_channels)
         found_count = len(found_items)
         filtered_items = found_items
-        if type_filter:
-            filtered_items = [item for item in filtered_items if item.get("type", "").lower() == type_filter.lower()]
         if cat_filter:
             filtered_items = [item for item in filtered_items if normalize_text(cat_filter) in [normalize_text(c) for c in item.get("categories", [item.get("category", "")])]]
 
@@ -1201,26 +1209,19 @@ async def send_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE
             else:
                 more_link = bot_settings.get("more_channel_link", "https://t.me/")
 
-            cats_display = ", ".join(item.get("categories", [item.get("category", "General")]))
             text_lines.append(
-    f"<blockquote>"
-    f"<b>{idx}. {item['name']}</b>\n"
-    f"<a href=\"{access_link}\">[🔗 𝑨𝒄𝒄𝒆𝒔𝒔 𝑳𝒊𝒏𝒌]</a> «||» <a href=\"{more_link}\">[ℹ️ 𝑴𝒐𝒓𝒆 𝑰𝒏𝒇𝒐]</a>"
-    f"</blockquote>"
-)
-
+                f"<blockquote>"
+                f"<b>{idx}. {item['name']}</b>\n"
+                f"<a href=\"{access_link}\">[🔗 𝑨𝒄𝒄𝒆𝒔𝒔 𝑳𝒊𝒏𝒌]</a> «||» <a href=\"{more_link}\">[ℹ️ 𝑴𝒐𝒓𝒆 𝑰𝒏𝒇𝒐]</a>"
+                f"</blockquote>"
+            )
 
     response_text = "\n".join(text_lines)
 
+    # Only single global database category filter button
     keyboard = [
         [
-            InlineKeyboardButton("ⓕ 𝔽𝕣𝕖𝕖", callback_data="filter_type_free"),
-            InlineKeyboardButton("ⓥ 𝕍𝕖𝕣𝕚𝕗𝕪", callback_data="filter_type_verify"),
-            InlineKeyboardButton("ⓟ 𝕡𝕣𝕖𝕞𝕚𝕦𝕞", callback_data="filter_type_premium"),
-        ],
-        [
-            InlineKeyboardButton("💫 𝙵𝚒𝚕𝚝𝚎𝚜", callback_data="prompt_category_filter"),
-            InlineKeyboardButton("🗂️ 𝙲𝚊𝚝𝚎𝚐𝚘𝚛𝚢", callback_data="filter")
+            InlineKeyboardButton("🗂️ Category", callback_data="filter")
         ]
     ]
 
@@ -1344,11 +1345,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         channel_id = matched_item["id"]
         target_invite_link = matched_item["link"]
-        try:
-            invite = await context.bot.create_chat_invite_link(chat_id=channel_id, name=f"Verified User {user_id}")
-            target_invite_link = invite.invite_link
-        except Exception as e:
-            logger.error(f"Failed to generate invite link after verification: {e}")
+        if channel_id != -999999:
+            try:
+                invite = await context.bot.create_chat_invite_link(chat_id=channel_id, name=f"Verified User {user_id}")
+                target_invite_link = invite.invite_link
+            except Exception as e:
+                logger.error(f"Failed to generate invite link after verification: {e}")
 
         message_text = (
             "✅ <b>Verification Successful!</b>\n\n"
@@ -1362,32 +1364,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         keyboard = [[InlineKeyboardButton("𝙹𝚘𝚒𝚗 𝙲𝚑𝚊𝚗𝚗𝚎𝚕", url=target_invite_link)]]
         await query.edit_message_text(text=message_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
-        return
-
-    if data.startswith("filter_type_"):
-        context.user_data["active_type_filter"] = data.replace("filter_type_", "")
-        context.user_data["current_page"] = 0
-        await send_search_results(update, context, edit_message=True)
-        return
-
-    if data == "prompt_category_filter":
-        # 💫 Filters button: lists categories strictly derived from current search results / found items, NOT the entire database
-        extracted_cats = set()
-        target_source = context.user_data.get("found_items", [])
-
-        for ch in target_source:
-            cats = ch.get("categories", [ch.get("category", "General")])
-            for c in cats:
-                if c:
-                    extracted_cats.add(c.strip())
-        categories = sorted(list(extracted_cats))
-        
-        cat_keyboard = [[InlineKeyboardButton("📁 All Categories", callback_data="set_cat_all")]]
-        for cat in categories:
-            cat_keyboard.append([InlineKeyboardButton(f"📁 {cat}", callback_data=f"set_cat_{cat}")])
-        cat_keyboard.append([InlineKeyboardButton("🔙 Back to Results", callback_data="back_to_search_results")])
-        
-        await query.edit_message_text("📂 <b>Select a category from search results:</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(cat_keyboard))
         return
 
     if data.startswith("set_cat_"):
@@ -1407,7 +1383,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "filter":
-        # 🗂️ Category button: extracts categories from the ENTIRE database
+        # Global Database Category Browser
         extracted_cats = set()
         all_channels = list(channels_collection.find({}))
 
