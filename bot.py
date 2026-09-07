@@ -1569,11 +1569,13 @@ async def handle_search_message_logic(update: Update, context: ContextTypes.DEFA
             found_items.append(ch)
 
     if not found_items and all_channels:
-        channel_names = [ch["name"] for ch in all_channels]
-        fuzzy_results = process.extract(norm_query, [normalize_text(n) for n in channel_names], limit=5, scorer=fuzz.token_sort_ratio)
+        # Use a dictionary to guarantee thefuzz returns the index key as the 3rd element
+        channel_names_dict = {i: normalize_text(ch.get("name", "")) for i, ch in enumerate(all_channels)}
+        fuzzy_results = process.extract(norm_query, channel_names_dict, limit=5, scorer=fuzz.token_sort_ratio)
         
         matched_indices = []
         for res in fuzzy_results:
+            # res is now (match_string, score, index_key)
             if len(res) >= 3 and res[1] >= 40:
                 idx = res[2]
                 if 0 <= idx < len(all_channels):
@@ -1586,19 +1588,21 @@ async def handle_search_message_logic(update: Update, context: ContextTypes.DEFA
         
         poster_id = item.get("bot_files", {}).get(bot_username, {}).get("poster")
         if not poster_id:
-            poster_id = item.get("poster_file_id", item.get("poster_url", "https://files.catbox.moe/aqak0m.jpg"))
+            # Use 'or' to safely fallback if the key exists but is explicitly set to None
+            poster_id = item.get("poster_file_id") or item.get("poster_url") or "https://files.catbox.moe/aqak0m.jpg"
             
-        title = item.get("name", "Unknown")
-        token_10 = item.get("token", "")
+        title = item.get("name") or "Unknown"
+        token_10 = item.get("token") or ""
         
-        status_val = item.get("status", "Ongoing").capitalize()
-        type_val = item.get("story_type", "Audio Story").capitalize()
-        episodes_val = item.get("episodes", "N/A")
-        genra_val = item.get("genra", "General")
-        access_val = item.get("type", "Free").capitalize()
-        categories_val = ", ".join(item.get("categories", [item.get("category", "General")]))
-        desc_val = item.get("description", "No description available.")
-        more_info_val = item.get("more_info", "")
+        # Safely wrap with 'or' before calling .capitalize()
+        status_val = str(item.get("status") or "Ongoing").capitalize()
+        type_val = str(item.get("story_type") or "Audio Story").capitalize()
+        episodes_val = item.get("episodes") or "N/A"
+        genra_val = item.get("genra") or "General"
+        access_val = str(item.get("type") or "Free").capitalize()
+        categories_val = ", ".join(item.get("categories") or [item.get("category") or "General"])
+        desc_val = item.get("description") or "No description available."
+        more_info_val = item.get("more_info") or ""
 
         caption = (
             f"🎧 <b>{title}</b>\n"
