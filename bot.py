@@ -2384,7 +2384,7 @@ WEB_APP_HTML_TEMPLATE = r"""
                 if (window.Telegram && window.Telegram.WebApp) {
                     window.Telegram.WebApp.close();
                 }
-            }, 2000); // 2000 ms = 2 second delay
+            }, 200); // 200 ms = 0.2 second delay
         }
     </script>
 </body>
