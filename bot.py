@@ -517,7 +517,7 @@ async def render_channel_list_page(update: Update, context: ContextTypes.DEFAULT
     all_channels = list(channels_collection.find({}))
     if search_filter:
         sf = normalize_text(search_filter)
-        items = [ch for ch in all_channels if sf in normalize_text(ch['name']) or sf in str(ch.get('id', ''))]
+        items = [ch for ch in all_channels if sf in normalize_text(ch.get('name', '')) or sf in str(ch.get('id', ''))]
     else:
         items = all_channels
 
@@ -538,7 +538,7 @@ async def render_channel_list_page(update: Update, context: ContextTypes.DEFAULT
         cats_val = ch.get('categories') or [ch.get('category', 'General')]
         cats_str = ", ".join(cats_val)
         lines.append(
-            f"<blockquote>{idx}. <b>{ch['name']}</b> (ID: <code>{ch.get('id')}</code>)\n"
+            f"<blockquote>{idx}. <b>{ch.get('name', 'Unknown')}</b> (ID: <code>{ch.get('id')}</code>)\n"
             f"Type: {ch.get('type')} | Cats: {cats_str}</blockquote>"
         )
     
@@ -919,7 +919,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                             [InlineKeyboardButton("🗑️ Delete Channel", callback_data=f"confirm_del_ch_{ch.get('id')}")],
                             [InlineKeyboardButton("❌ Cancel", callback_data="confirm_no")]
                         ]
-                        await update.message.reply_text(f"📁 Selected Channel: <b>{ch['name']}</b>. Choose action:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+                        await update.message.reply_text(f"📁 Selected Channel: <b>{ch.get('name', 'Unknown')}</b>. Choose action:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
                     else:
                         await update.message.reply_text("❌ Invalid serial number range.")
                 except ValueError:
@@ -1506,15 +1506,18 @@ async def handle_search_message_logic(update: Update, context: ContextTypes.DEFA
     found_items = []
     for ch in all_channels:
         cats = [normalize_text(c) for c in ch.get("categories", [ch.get("category", "")])]
-        if norm_query in normalize_text(ch["name"]) or any(norm_query in c for c in cats):
+        # Added .get() to prevent KeyError if "name" is missing in older DB imports
+        if norm_query in normalize_text(ch.get("name", "Unknown")) or any(norm_query in c for c in cats):
             found_items.append(ch)
 
     if not found_items and all_channels:
-        channel_names = [ch["name"] for ch in all_channels]
-        fuzzy_results = process.extract(norm_query, [normalize_text(n) for n in channel_names], limit=5, scorer=fuzz.token_sort_ratio)
+        # Supplied dictionary to process.extract so it returns 3-tuples (choice, score, key) instead of 2-tuples
+        channel_names = {i: normalize_text(ch.get("name", "Unknown")) for i, ch in enumerate(all_channels)}
+        fuzzy_results = process.extract(norm_query, channel_names, limit=5, scorer=fuzz.token_sort_ratio)
         
         matched_indices = []
         for res in fuzzy_results:
+            # Fuzzy match now successfully unpacks the index because dictionary returns 3 elements
             if len(res) >= 3 and res[1] >= 40:
                 idx = res[2]
                 if 0 <= idx < len(all_channels):
@@ -1577,7 +1580,17 @@ async def handle_search_message_logic(update: Update, context: ContextTypes.DEFA
             )
             safe_delete_later(context, sent_poster.chat_id, sent_poster.message_id, 600)
         except Exception as e:
-            logger.error(f"Failed to send poster photo: {e}")
+            logger.error(f"Failed to send poster photo: {e}. Falling back to text response.")
+            # Added Text Fallback: If Telegram servers reject the URL, it ensures the user still gets a response
+            try:
+                sent_text = await update.message.reply_text(
+                    text=caption,
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+                safe_delete_later(context, sent_text.chat_id, sent_text.message_id, 600)
+            except Exception as e2:
+                logger.error(f"Failed to send fallback text: {e2}")
 
         if len(found_items) > 1:
             matching_names = [f"• <b><code>{fi.get('name', 'Unknown')}</code></b>" for fi in found_items]
