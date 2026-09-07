@@ -13,7 +13,7 @@ from flask import Flask, render_template_string, request as flask_request, jsoni
 from dotenv import load_dotenv
 from threading import Thread
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ChatJoinRequest, WebAppInfo
-from telegram.error import FloodWait
+from telegram.error import RetryAfter
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -110,8 +110,8 @@ async def process_forward_queue(application: Application):
                     message_id=message_id,
                     message_thread_id=topic_id
                 )
-            except FloodWait as e:
-                logger.warning(f"FloodWait encountered: sleeping for {e.retry_after} seconds.")
+                      except RetryAfter as e:
+                logger.warning(f"Rate limit encountered: sleeping for {e.retry_after} seconds.")
                 await asyncio.sleep(e.retry_after + 1)
                 await application.bot.copy_message(
                     chat_id=target_group_id,
@@ -119,6 +119,7 @@ async def process_forward_queue(application: Application):
                     message_id=message_id,
                     message_thread_id=topic_id
                 )
+
             except Exception as e:
                 logger.error(f"Error copying message from {chat_id} to group {target_group_id}: {e}")
             
