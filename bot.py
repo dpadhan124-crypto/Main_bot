@@ -2182,8 +2182,8 @@ WEB_APP_HTML_TEMPLATE = r"""
             <div class="section-title">📖 Story Synopsis & Info</div>
             <p id="det-info" style="margin: 0 0 16px 0; font-size: 13px; line-height: 1.5; color: var(--text-secondary); white-space: pre-wrap;"></p>
             <div class="action-buttons-container">
-                <button id="btn-get-demos" class="action-btn btn-demo" onclick="openExternalLink(window.demoUrl)">🎧 Get Demo Episodes</button>
-                <button id="btn-story-access" class="action-btn btn-access" onclick="openExternalLink(window.accessUrl)">🎶 Listen/Access Story</button>
+                <button id="btn-get-demos" class="action-btn btn-demo" onclick="handleActionAndClose(window.demoUrl)">🎧 Get Demo Episodes</button>
+                <button id="btn-story-access" class="action-btn btn-access" onclick="handleActionAndClose(window.accessUrl)">🎶 Listen/Access Story</button>
             </div>
         </div>
     </div>
@@ -2376,6 +2376,15 @@ WEB_APP_HTML_TEMPLATE = r"""
                 console.log("External link opening fallback error:", e);
                 window.location.href = url;
             }
+        }
+
+        function handleActionAndClose(url) {
+            openExternalLink(url);
+            setTimeout(() => {
+                if (window.Telegram && window.Telegram.WebApp) {
+                    window.Telegram.WebApp.close();
+                }
+            }, 2000); // 2000 ms = 2 second delay
         }
     </script>
 </body>
