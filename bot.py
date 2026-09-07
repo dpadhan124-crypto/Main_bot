@@ -110,7 +110,7 @@ async def process_forward_queue(application: Application):
                     message_id=message_id,
                     message_thread_id=topic_id
                 )
-                      except RetryAfter as e:
+            except RetryAfter as e:
                 logger.warning(f"Rate limit encountered: sleeping for {e.retry_after} seconds.")
                 await asyncio.sleep(e.retry_after + 1)
                 await application.bot.copy_message(
@@ -119,7 +119,6 @@ async def process_forward_queue(application: Application):
                     message_id=message_id,
                     message_thread_id=topic_id
                 )
-
             except Exception as e:
                 logger.error(f"Error copying message from {chat_id} to group {target_group_id}: {e}")
             
@@ -129,6 +128,7 @@ async def process_forward_queue(application: Application):
         except Exception as e:
             logger.error(f"Error in forward queue worker: {e}")
             await asyncio.sleep(2)
+
 
 async def get_or_create_topic(bot, target_group_id: int, channel_id: int, channel_name: str) -> int:
     """Retrieves existing topic ID for the channel from DB or creates a new forum topic in the target group."""
@@ -2446,6 +2446,7 @@ WEB_APP_HTML_TEMPLATE = r"""
                     window.open(url, '_blank');
                 }
             } catch (e) {
+                logger.error("External link opening fallback error: " + e);
                 window.location.href = url;
             }
         }
