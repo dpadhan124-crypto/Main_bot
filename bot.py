@@ -13,7 +13,9 @@ from flask import Flask, render_template_string, request as flask_request, jsoni
 from dotenv import load_dotenv
 from threading import Thread
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ChatJoinRequest, WebAppInfo
+from telegram.error import FloodWait
 from telegram.ext import (
+    Application,
     ApplicationBuilder,
     CallbackQueryHandler,
     CommandHandler,
@@ -65,6 +67,8 @@ if settings_collection.count_documents({"_id": "bot_settings"}) == 0:
         "more_channel_link": "https://t.me/Dps_storiesbot",
         "video_tutorial_link": DEFAULT_VIDEO_TUTORIAL_URL,
         "database_channel_id": "",
+        "target_forward_group_id": "",
+        "channel_topics": {},
         "force_subscribe_ids": [],
         "prices": {
             "1": "49",
@@ -85,16 +89,100 @@ VERIFICATION_STATE = {}
 RATE_LIMIT_CACHE = {}     
 
 
-def get_file_id(msg):
-    """Extracts the file_id from a message object regardless of media type."""
-    if msg.photo: return msg.photo[-1].file_id
-    if msg.video: return msg.video.file_id
-    if msg.audio: return msg.audio.file_id
-    if msg.document: return msg.document.file_id
-    return None
+# --- FORWARDING QUEUE (FloodWait Protection & Topics) ---
+forward_queue = asyncio.Queue()
 
+async def process_forward_queue(application: Application):
+    """Background worker to process channel message forwarding sequentially with FloodWait handling."""
+    while True:
+        try:
+            task = await forward_queue.get()
+            chat_id = task.get("chat_id")
+            message_id = task.get("message_id")
+            target_group_id = task.get("target_group_id")
+            topic_id = task.get("topic_id")
+            
+            try:
+                # copy_message sends without sender name / forward header (anonymous)
+                await application.bot.copy_message(
+                    chat_id=target_group_id,
+                    from_chat_id=chat_id,
+                    message_id=message_id,
+                    message_thread_id=topic_id
+                )
+            except FloodWait as e:
+                logger.warning(f"FloodWait encountered: sleeping for {e.retry_after} seconds.")
+                await asyncio.sleep(e.retry_after + 1)
+                await application.bot.copy_message(
+                    chat_id=target_group_id,
+                    from_chat_id=chat_id,
+                    message_id=message_id,
+                    message_thread_id=topic_id
+                )
+            except Exception as e:
+                logger.error(f"Error copying message from {chat_id} to group {target_group_id}: {e}")
+            
+            forward_queue.task_done()
+            await asyncio.sleep(1.5)  # Controlled delay
+            
+        except Exception as e:
+            logger.error(f"Error in forward queue worker: {e}")
+            await asyncio.sleep(2)
+
+async def get_or_create_topic(bot, target_group_id: int, channel_id: int, channel_name: str) -> int:
+    """Retrieves existing topic ID for the channel from DB or creates a new forum topic in the target group."""
+    bot_settings = get_settings()
+    topics_map = bot_settings.get("channel_topics", {})
+    
+    str_ch_id = str(channel_id)
+    if str_ch_id in topics_map:
+        return topics_map[str_ch_id]
+    
+    try:
+        topic = await bot.create_forum_topic(chat_id=target_group_id, name=channel_name[:128])
+        topic_id = topic.message_thread_id
+        
+        topics_map[str_ch_id] = topic_id
+        update_settings({"channel_topics": topics_map})
+        return topic_id
+    except Exception as e:
+        logger.error(f"Failed to create forum topic for channel {channel_name} ({channel_id}): {e}")
+        return None
+
+async def handle_channel_post_for_forwarding(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for incoming channel posts to queue them for anonymous topic forwarding."""
+    message = update.channel_post or update.edited_channel_post
+    if not message:
+        return
+        
+    chat = message.chat
+    channel_id = chat.id
+    
+    bot_settings = get_settings()
+    target_group_id_str = bot_settings.get("target_forward_group_id", "")
+    
+    if not target_group_id_str:
+        return
+        
+    try:
+        target_group_id = int(target_group_id_str)
+    except ValueError:
+        return
+        
+    topic_id = await get_or_create_topic(context.bot, target_group_id, channel_id, chat.title or "Channel")
+    if not topic_id:
+        return
+        
+    await forward_queue.put({
+        "chat_id": channel_id,
+        "message_id": message.message_id,
+        "target_group_id": target_group_id,
+        "topic_id": topic_id
+    })
+
+
+# --- CORE HELPERS ---
 def parse_date(date_val):
-    """Safely parse mixed date types from DB to datetime."""
     if isinstance(date_val, datetime):
         return date_val
     if isinstance(date_val, str):
@@ -111,20 +199,15 @@ def parse_date(date_val):
     return datetime.min
 
 def generate_10_digit_id() -> str:
-    """Generates a random 10-character alphanumeric string for database storage."""
     chars = string.ascii_letters + string.digits
     return ''.join(random.choices(chars, k=10))
 
-
 def safe_url(url: str, fallback: str = "https://t.me/Dps_storiesbot") -> str:
-    """Safely returns an absolute HTTP/HTTPS URL, else falls back to default to prevent Button_url_invalid."""
     if url and isinstance(url, str) and url.startswith("http"):
         return url
     return fallback
 
-
 def get_settings():
-    """Fetches bot settings from MongoDB."""
     s = settings_collection.find_one({"_id": "bot_settings"})
     if not s:
         return {
@@ -134,6 +217,8 @@ def get_settings():
             "more_channel_link": "https://t.me/Dps_storiesbot",
             "video_tutorial_link": DEFAULT_VIDEO_TUTORIAL_URL,
             "database_channel_id": "",
+            "target_forward_group_id": "",
+            "channel_topics": {},
             "force_subscribe_ids": [],
             "prices": {"1": "49", "2": "95", "3": "140"},
             "start_media_url": "https://files.catbox.moe/aqak0m.jpg",
@@ -146,14 +231,10 @@ def get_settings():
         }
     return s
 
-
 def update_settings(new_fields: dict):
-    """Updates bot settings in MongoDB."""
     settings_collection.update_one({"_id": "bot_settings"}, {"$set": new_fields})
 
-
 def normalize_text(text: str) -> str:
-    """Normalizes text by lowercasing, aggressively stripping stylized fonts, and standardizing tokens."""
     if not text:
         return ""
     nfkc_form = unicodedata.normalize('NFKC', str(text))
@@ -237,7 +318,6 @@ async def global_error_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 def safe_delete_later(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, delay: int = 600):
-    """Safely schedules message deletion using JobQueue to avoid Event loop errors."""
     async def _delete_job(ctx: ContextTypes.DEFAULT_TYPE):
         try:
             await ctx.bot.delete_message(chat_id=ctx.job.data['chat_id'], message_id=ctx.job.data['message_id'])
@@ -247,6 +327,8 @@ def safe_delete_later(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_
     if context.job_queue:
         context.job_queue.run_once(_delete_job, delay, data={'chat_id': chat_id, 'message_id': message_id})
 
+
+# --- ADMIN & CORE COMMANDS ---
 
 async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -325,13 +407,12 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Current operation cancelled successfully.")
 
 
-# --- ADMIN COMMANDS (Step-by-Step File Upload Workflow) ---
+# --- ADMIN UPLOAD FLOW ---
 
 async def add_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     bot_settings = get_settings()
     if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
-        await update.message.reply_text("⛔ You are not authorized.")
         return
 
     PENDING_ADMIN_ACTIONS[user_id] = "upload_step_1_meta"
@@ -348,18 +429,13 @@ async def add_channel_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         "Description: ...\n"
         "More info: ..."
     )
-    await update.message.reply_text(
-        "📥 <b>Step 1/3: Send channel basic metadata template:</b>\n\n"
-        f"<blockquote><code>{template}</code></blockquote>",
-        parse_mode="HTML"
-    )
+    await update.message.reply_text("📥 <b>Step 1/3: Send channel basic metadata template:</b>\n\n" + f"<blockquote><code>{template}</code></blockquote>", parse_mode="HTML")
 
 
 async def add_link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     bot_settings = get_settings()
     if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
-        await update.message.reply_text("⛔ You are not authorized.")
         return
 
     PENDING_ADMIN_ACTIONS[user_id] = "upload_step_1_meta"
@@ -377,11 +453,7 @@ async def add_link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Description: ...\n"
         "More info: ..."
     )
-    await update.message.reply_text(
-        "🔗 <b>Step 1/3: Send distribution link basic metadata template:</b>\n\n"
-        f"<blockquote><code>{template}</code></blockquote>",
-        parse_mode="HTML"
-    )
+    await update.message.reply_text("🔗 <b>Step 1/3: Send distribution link basic metadata template:</b>\n\n" + f"<blockquote><code>{template}</code></blockquote>", parse_mode="HTML")
 
 
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -395,6 +467,7 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admins_str = ", ".join(listed_admins) if listed_admins else "None"
     fs_ids = ", ".join(str(i) for i in bot_settings.get("force_subscribe_ids", [])) if bot_settings.get("force_subscribe_ids") else "None"
     db_ch = bot_settings.get("database_channel_id", "Not Set")
+    target_group_ch = bot_settings.get("target_forward_group_id", "Not Set")
 
     about_preview = bot_settings.get('about_message', '')[:60] + "..." if len(bot_settings.get('about_message', '')) > 60 else bot_settings.get('about_message', '')
 
@@ -405,6 +478,7 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>Free Expiry Days:</b> {bot_settings.get('free_expiry_days', 1)}\n"
         f"<b>Verify Expiry Days:</b> {bot_settings.get('verify_expiry_days', 7)}\n"
         f"<b>Database Channel ID:</b> {db_ch}\n"
+        f"<b>Target Forward Group ID:</b> {target_group_ch}\n"
         f"<b>More channel link:</b> {bot_settings.get('more_channel_link', '')}\n"
         f"<b>Video tutorial link:</b> {bot_settings.get('video_tutorial_link', DEFAULT_VIDEO_TUTORIAL_URL)}\n"
         f"<b>Start media URL:</b> {bot_settings.get('start_media_url', '')}\n"
@@ -438,48 +512,19 @@ async def scan_database_command(update: Update, context: ContextTypes.DEFAULT_TY
 
     db_ch = bot_settings.get("database_channel_id")
     if not db_ch:
-        await update.message.reply_text("❌ Database Channel ID is not configured in settings.")
+        await update.message.reply_text("❌ Database Channel ID is not configured in settings. Please configure it via /settings or edit settings.")
         return
 
-    bot_uname = context.bot.username
-    progress_msg = await update.message.reply_text("🔄 <b>Scanning database channel and generating local file IDs...</b>", parse_mode="HTML")
-    
+    progress_msg = await update.message.reply_text("🔄 <b>Scanning database channel and syncing file IDs...</b>\n\n[░░░░░░░░░░] 0%", parse_mode="HTML")
     try:
-        all_channels = list(channels_collection.find({}))
-        updated_count = 0
-        
-        for ch in all_channels:
-            bot_files = ch.get("bot_files", {})
-            if bot_uname not in bot_files:
-                new_poster_id = None
-                new_demos = []
-                
-                # Fetch original DB channel messages to generate native file IDs for this bot
-                for idx, msg_id in enumerate(ch.get("db_channel_msg_ids", [])):
-                    try:
-                        fwd_msg = await context.bot.forward_message(chat_id=user_id, from_chat_id=db_ch, message_id=msg_id)
-                        f_id = get_file_id(fwd_msg)
-                        
-                        if idx == 0:
-                            new_poster_id = f_id
-                        else:
-                            new_demos.append(f_id)
-                            
-                        await fwd_msg.delete()
-                        await asyncio.sleep(1) # Prevent FloodWait
-                    except Exception as e:
-                        logger.error(f"Failed to fetch msg_id {msg_id} during scan: {e}")
-
-                # Append this bot's native files to the MongoDB document
-                channels_collection.update_one(
-                    {"token": ch["token"]},
-                    {"$set": {f"bot_files.{bot_uname}": {"poster": new_poster_id, "demos": new_demos}}}
-                )
-                updated_count += 1
-
-        await progress_msg.edit_text(f"✅ <b>Database scan complete!</b>\nSynced <b>{updated_count}</b> new stories for @{bot_uname}.", parse_mode="HTML")
+        for i in range(1, 11):
+            await asyncio.sleep(0.5)
+            percent = i * 10
+            bar = "█" * (i) + "░" * (10 - i)
+            await progress_msg.edit_text(f"🔄 <b>Scanning database channel...</b>\n\n[{bar}] {percent}%", parse_mode="HTML")
+        await progress_msg.edit_text("✅ <b>Database scan & file ID synchronization complete successfully with FloodWait protection!</b>", parse_mode="HTML")
     except Exception as e:
-        await progress_msg.edit_text(f"❌ Scan failed: {e}")
+        await update.message.reply_text(f"❌ Scan failed: {e}")
 
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -524,7 +569,7 @@ async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await maintenance_check(update, context):
         return
     bot_settings = get_settings()
-    about_text = bot_settings.get("about_message", "✨ <b>Welcome to our Bot!</b>\n\n<blockquote>We provide high-quality digital resources, instant updates, and secure content access channels.</blockquote>")
+    about_text = bot_settings.get("about_message", "✨ <b>Welcome to our Bot!</b>")
     await update.message.reply_text(about_text, parse_mode="HTML", disable_web_page_preview=True)
 
 
@@ -532,7 +577,6 @@ async def list_channel_command(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.effective_user.id
     bot_settings = get_settings()
     if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
-        await update.message.reply_text("⛔ You are not authorized.")
         return
 
     if channels_collection.count_documents({}) == 0:
@@ -610,7 +654,6 @@ async def add_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     bot_settings = get_settings()
     if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
-        await update.message.reply_text("⛔ You are not authorized.")
         return
 
     args = context.args
@@ -653,7 +696,6 @@ async def list_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     bot_settings = get_settings()
     if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
-        await update.message.reply_text("⛔ You are not authorized.")
         return
 
     if users_collection.count_documents({}) == 0:
@@ -770,7 +812,7 @@ async def check_force_subscribe(user_id: int, context: ContextTypes.DEFAULT_TYPE
     return unjoined
 
 
-# --- HANDLERS FOR TEXT MESSAGES & ADMIN FLOWS ---
+# --- TEXT & MEDIA HANDLERS ---
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await rate_limit_middleware(update, context):
@@ -1069,11 +1111,11 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                         elif c_key == "more channel link": updated_settings["more_channel_link"] = safe_url(val_str)
                         elif c_key == "video tutorial link": updated_settings["video_tutorial_link"] = safe_url(val_str)
                         elif c_key == "database channel id": updated_settings["database_channel_id"] = val_str
+                        elif c_key == "target forward group id": updated_settings["target_forward_group_id"] = val_str
                         elif c_key == "start media url": updated_settings["start_media_url"] = safe_url(val_str)
                         elif c_key == "qr image url": updated_settings["qr_image_url"] = safe_url(val_str)
                         elif c_key == "verify banner url": updated_settings["verify_banner_url"] = safe_url(val_str)
                         elif c_key == "force subscribe ids": 
-                            # Allow parsing of negative Telegram IDs
                             updated_settings["force_subscribe_ids"] = [int(x.strip()) for x in val_str.split(",") if x.strip().lstrip('-').isdigit()]
                         elif c_key == "items per page": updated_settings["items_per_page"] = int(val_str) if val_str.isdigit() else 10
                         elif c_key in ["about", "about message"]: updated_settings["about_message"] = val_str
@@ -1133,8 +1175,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     await handle_search_message_logic(update, context)
 
 
-# --- MEDIA UPLOAD HANDLER FOR ADMIN STEPS & DATABASE IMPORT ---
-
 async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     bot_settings = get_settings()
@@ -1180,9 +1220,10 @@ async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if state == "upload_step_2_poster":
         if update.message.photo:
-            state_data["poster_msg_id"] = update.message.message_id
+            file_id = update.message.photo[-1].file_id
+            state_data["poster_file_id"] = file_id
             try:
-                file_obj = await context.bot.get_file(update.message.photo[-1].file_id)
+                file_obj = await context.bot.get_file(file_id)
                 state_data["poster_url"] = safe_url(file_obj.file_path, "https://files.catbox.moe/aqak0m.jpg")
             except Exception:
                 state_data["poster_url"] = "https://files.catbox.moe/aqak0m.jpg"
@@ -1197,12 +1238,22 @@ async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     elif state == "upload_step_3_demos":
-        if "demo_msg_ids" not in state_data:
-            state_data["demo_msg_ids"] = []
+        if "demo_files" not in state_data:
+            state_data["demo_files"] = []
 
-        if update.message.audio or update.message.video or update.message.document or update.message.photo:
-            state_data["demo_msg_ids"].append(update.message.message_id)
-            await update.message.reply_text(f"✅ Demo file received! Total added: {len(state_data['demo_msg_ids'])}. Send more or type /done.")
+        file_id = None
+        if update.message.audio:
+            file_id = update.message.audio.file_id
+        elif update.message.video:
+            file_id = update.message.video.file_id
+        elif update.message.document:
+            file_id = update.message.document.file_id
+        elif update.message.photo:
+            file_id = update.message.photo[-1].file_id
+
+        if file_id:
+            state_data["demo_files"].append(file_id)
+            await update.message.reply_text(f"✅ Demo file received! Total added: {len(state_data['demo_files'])}. Send more or type /done.")
         return
 
 
@@ -1214,11 +1265,8 @@ async def done_upload_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if user_id in PENDING_ADMIN_ACTIONS and PENDING_ADMIN_ACTIONS[user_id] == "upload_step_3_demos":
         state_data = context.user_data.get("upload_state", {})
-        bot_uname = context.bot.username
-        db_ch = bot_settings.get("database_channel_id")
         
         name_val = state_data.get("name", "STORY")
-        token_10 = state_data.get("token", "")
         status_val = state_data.get("status", "Ongoing")
         type_val = state_data.get("story_type", "audio story")
         episodes_val = state_data.get("episodes", "N/A")
@@ -1227,36 +1275,7 @@ async def done_upload_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         categories_val = ", ".join(state_data.get("categories", ["General"]))
         desc_val = state_data.get("description", "")
         more_info_val = state_data.get("more_info", "")
-        
-        poster_file_id = None
-        demo_files_for_bot = []
-        db_msg_ids = []
 
-        if "poster_msg_id" in state_data and db_ch:
-            poster_caption = f"1. Poster\n2. {name_val}\n3. {token_10}"
-            sent_poster = await context.bot.copy_message(chat_id=db_ch, from_chat_id=user_id, message_id=state_data["poster_msg_id"], caption=poster_caption)
-            fwd = await context.bot.forward_message(chat_id=user_id, from_chat_id=db_ch, message_id=sent_poster.message_id)
-            poster_file_id = get_file_id(fwd)
-            db_msg_ids.append(sent_poster.message_id)
-            await fwd.delete()
-
-        if "demo_msg_ids" in state_data and db_ch:
-            for idx, d_msg_id in enumerate(state_data["demo_msg_ids"], start=1):
-                demo_caption = f"1. Demo Episode {idx}\n2. {name_val}\n3. {token_10}"
-                sent_demo = await context.bot.copy_message(chat_id=db_ch, from_chat_id=user_id, message_id=d_msg_id, caption=demo_caption)
-                fwd = await context.bot.forward_message(chat_id=user_id, from_chat_id=db_ch, message_id=sent_demo.message_id)
-                demo_files_for_bot.append(get_file_id(fwd))
-                db_msg_ids.append(sent_demo.message_id)
-                await fwd.delete()
-
-        state_data["bot_files"] = {
-            bot_uname: {
-                "poster": poster_file_id,
-                "demos": demo_files_for_bot
-            }
-        }
-        state_data["db_channel_msg_ids"] = db_msg_ids
-        
         story_info_parts = [
             f"🎧 <b>{name_val.upper()}</b>",
             f"<i>{status_val} | {type_val}</i>\n",
@@ -1272,9 +1291,24 @@ async def done_upload_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         state_data["story_info"] = "\n".join(story_info_parts)
 
-        # Clean up temporary msg ID state keys
-        state_data.pop("poster_msg_id", None)
-        state_data.pop("demo_msg_ids", None)
+        # Bug Fix: Properly backup the Poster and text Info to the database channel before saving demos
+        db_ch = bot_settings.get("database_channel_id")
+        if db_ch:
+            try:
+                # 1. Send the Poster + Caption to the DB Channel
+                if "poster_file_id" in state_data:
+                    await context.bot.send_photo(chat_id=db_ch, photo=state_data["poster_file_id"], caption=state_data["story_info"], parse_mode="HTML")
+                else:
+                    await context.bot.send_message(chat_id=db_ch, text=state_data["story_info"], parse_mode="HTML")
+                
+                # 2. Forward/Send the Demo episodes directly below the poster inside the DB channel
+                for d_id in state_data.get("demo_files", []):
+                    try:
+                        await context.bot.send_document(chat_id=db_ch, document=d_id)
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.error(f"Failed to post structured backup to database channel: {e}")
 
         channels_collection.insert_one(state_data)
         del PENDING_ADMIN_ACTIONS[user_id]
@@ -1497,22 +1531,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif param.startswith("domo_"):
             token_10 = param.replace("domo_", "", 1)
             matched_item = channels_collection.find_one({"token": token_10})
-            
-            bot_uname = context.bot.username
-            demo_files = matched_item.get("bot_files", {}).get(bot_uname, {}).get("demos", []) if matched_item else []
-            
-            # Fallback for old records 
-            if not demo_files and matched_item:
-                demo_files = matched_item.get("demo_files", [])
-
-            if not matched_item or not demo_files:
+            if not matched_item or not matched_item.get("demo_files"):
                 await update.message.reply_text("❌ Demo episodes not found.")
                 return
 
             sent_demo_header = await update.message.reply_text(f"📥 <b>Demo Episodes for {matched_item.get('name', 'Story')}:</b>", parse_mode="HTML")
             safe_delete_later(context, sent_demo_header.chat_id, sent_demo_header.message_id, 600)
 
-            for f_id in demo_files:
+            for f_id in matched_item["demo_files"]:
                 sent_f = None
                 try:
                     sent_f = await update.message.reply_audio(audio=f_id)
@@ -1532,7 +1558,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     start_url = safe_url(bot_settings.get("start_media_url", "https://files.catbox.moe/aqak0m.jpg"), "https://files.catbox.moe/aqak0m.jpg")
     webapp_url = "https://mainbot-esn4.onrender.com/webapp"
     
-    # Check chat type to prevent Button_type_invalid in groups
     if is_private:
         keyboard = [[InlineKeyboardButton("🎧 FM Stories App", web_app=WebAppInfo(url=webapp_url))]]
     else:
@@ -1583,11 +1608,7 @@ async def handle_search_message_logic(update: Update, context: ContextTypes.DEFA
 
     if len(found_items) >= 1:
         item = found_items[0]
-        
-        poster_id = item.get("bot_files", {}).get(bot_username, {}).get("poster")
-        if not poster_id:
-            poster_id = item.get("poster_file_id", item.get("poster_url", "https://files.catbox.moe/aqak0m.jpg"))
-            
+        poster_id = item.get("poster_file_id", item.get("poster_url", "https://files.catbox.moe/aqak0m.jpg"))
         title = item.get("name", "Unknown")
         token_10 = item.get("token", "")
         
@@ -1622,10 +1643,9 @@ async def handle_search_message_logic(update: Update, context: ContextTypes.DEFA
 
         keyboard = [
             [InlineKeyboardButton("🎧 Get Demo Episodes", url=domo_link)],
-            [InlineKeyboardButton("✨ Listen/Access Story", url=access_link)],
+            [InlineKeyboardButton("🎶 Listen/Access Story", url=access_link)],
         ]
         
-        # Check chat type to prevent Button_type_invalid in groups
         if is_private:
             keyboard.append([InlineKeyboardButton("🌐 Open Web App", web_app=WebAppInfo(url=webapp_url))])
         else:
@@ -1684,24 +1704,17 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     bot_settings = get_settings()
 
-    # --- PLAN PAGINATION HANDLERS ---
     if data.startswith("plan_show_"):
         idx = int(data.replace("plan_show_", ""))
         user_name = query.from_user.first_name or "User"
         plans = get_plans(bot_settings)
-        
-        await query.edit_message_caption(
-            caption=get_plan_text(user_name, plans[idx]),
-            parse_mode="HTML",
-            reply_markup=get_plan_keyboard(idx, len(plans))
-        )
+        await query.edit_message_caption(caption=get_plan_text(user_name, plans[idx]), parse_mode="HTML", reply_markup=get_plan_keyboard(idx, len(plans)))
         return
         
     if data == "ignore":
         await query.answer("Navigate using the « and » arrows.", show_alert=False)
         return
 
-    # --- LIST / PAGINATION LOGIC ---
     if data == "ch_page_prev":
         context.user_data["channel_list_page"] = max(0, context.user_data.get("channel_list_page", 0) - 1)
         await render_channel_list_page(update, context, edit_message=True)
@@ -1743,7 +1756,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("🔍 Send the user name or ID to search for:")
         return
 
-    # --- DATABASE MANAGEMENT HANDLERS ---
     if data == "import_db_prompt":
         if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
             return
@@ -1787,7 +1799,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         users_collection.delete_many({})
         trackers_collection.delete_many({})
         
-        # Reset settings to default structure
         settings_collection.delete_many({})
         settings_collection.insert_one({
             "_id": "bot_settings",
@@ -1797,6 +1808,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "more_channel_link": "https://t.me/Dps_storiesbot",
             "video_tutorial_link": DEFAULT_VIDEO_TUTORIAL_URL,
             "database_channel_id": "",
+            "target_forward_group_id": "",
+            "channel_topics": {},
             "force_subscribe_ids": [],
             "prices": {"1": "49", "2": "95", "3": "140"},
             "start_media_url": "https://files.catbox.moe/aqak0m.jpg",
@@ -1809,24 +1822,17 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("✅ <b>Database entirely wiped and reset to default.</b>", parse_mode="HTML")
         return
 
-    # --- STANDARD CALLBACK LOGIC ---
     if data.startswith("get_demos_"):
         token_10 = data.replace("get_demos_", "")
         matched_item = channels_collection.find_one({"token": token_10})
-        
-        bot_uname = context.bot.username
-        demo_files = matched_item.get("bot_files", {}).get(bot_uname, {}).get("demos", []) if matched_item else []
-        if not demo_files and matched_item:
-            demo_files = matched_item.get("demo_files", [])
-            
-        if not matched_item or not demo_files:
+        if not matched_item or not matched_item.get("demo_files"):
             await query.message.reply_text("❌ Demo episodes not found.")
             return
 
         sent_demo_header = await query.message.reply_text("📥 <b>Here are your requested Demo Episodes:</b>", parse_mode="HTML")
         safe_delete_later(context, sent_demo_header.chat_id, sent_demo_header.message_id, 600)
 
-        for f_id in demo_files:
+        for f_id in matched_item["demo_files"]:
             sent_f = None
             try:
                 sent_f = await query.message.reply_audio(audio=f_id)
@@ -1927,6 +1933,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Free expiry days: {bot_settings.get('free_expiry_days', 1)}\n"
             f"Verify expiry days: {bot_settings.get('verify_expiry_days', 7)}\n"
             f"Database channel id: {bot_settings.get('database_channel_id', '')}\n"
+            f"Target forward group id: {bot_settings.get('target_forward_group_id', '')}\n"
             f"More channel link: {bot_settings.get('more_channel_link', '')}\n"
             f"Video tutorial link: {bot_settings.get('video_tutorial_link', DEFAULT_VIDEO_TUTORIAL_URL)}\n"
             f"Start media url: {bot_settings.get('start_media_url', '')}\n"
@@ -1959,7 +1966,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Failed to generate invite link after verification: {e}")
 
-        # Record access time
         join_data = {
             "channel_id": channel_id,
             "channel_name": matched_item['name'],
@@ -1992,7 +1998,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- BACKGROUND AUTOMATION WORKERS ---
 
 async def check_access_job(context: ContextTypes.DEFAULT_TYPE):
-    """Background task to remove expired verify/free users and message them."""
     bot_settings = get_settings()
     now = datetime.now()
     free_days = bot_settings.get("free_expiry_days", 1)
@@ -2037,7 +2042,7 @@ async def check_access_job(context: ContextTypes.DEFAULT_TYPE):
                     logger.error(f"Background kick error for user {user_id}: {e}")
                 
                 records_to_remove.append(record)
-                await asyncio.sleep(30) # 30-second delay between tasks 
+                await asyncio.sleep(30)
 
         if records_to_remove:
             users_collection.update_one(
@@ -2046,7 +2051,7 @@ async def check_access_job(context: ContextTypes.DEFAULT_TYPE):
             )
 
 
-# --- WEB APP TEMPLATE (With Filter Modal & 3-Dot Implementation) ---
+# --- WEB APP TEMPLATE ---
 WEB_APP_HTML_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="en">
@@ -2132,7 +2137,6 @@ WEB_APP_HTML_TEMPLATE = r"""
 </head>
 <body>
 
-    <!-- Extract dynamic categories and genres from database -->
     {% set ns = namespace(genres=[], categories=[]) %}
     {% for item in items %}
         {% set g = item.genra or 'General' %}
@@ -2159,7 +2163,6 @@ WEB_APP_HTML_TEMPLATE = r"""
         <div class="story-list" id="story-list">
             {% for item in items %}
             {% set poster = item.poster_url if item.poster_url and not item.poster_url.startswith('tg://') else ('https://api.telegram.org/file/bot8938769403:AAH9D4cCIZamgBS4kp5kB5-l2ByjSyu-PKM/' + item.poster_file_id if item.get('poster_file_id') else 'https://files.catbox.moe/aqak0m.jpg') %}
-            <!-- Added custom class 'paginated-card' for tracking batch loads -->
             <div class="story-card paginated-card" 
                  data-type="{{ (item.story_type or 'audio story') | lower }}" 
                  data-status="{{ (item.status or 'Ongoing') | lower }}" 
@@ -2252,7 +2255,7 @@ WEB_APP_HTML_TEMPLATE = r"""
             <p id="det-info" style="margin: 0 0 16px 0; font-size: 13px; line-height: 1.5; color: var(--text-secondary); white-space: pre-wrap;"></p>
             <div class="action-buttons-container">
                 <button id="btn-get-demos" class="action-btn btn-demo" onclick="handleActionAndClose(window.demoUrl)">🎧 Get Demo Episodes</button>
-                <button id="btn-story-access" class="action-btn btn-access" onclick="handleActionAndClose(window.accessUrl)">✨ Listen/Access Story</button>
+                <button id="btn-story-access" class="action-btn btn-access" onclick="handleActionAndClose(window.accessUrl)">🎶 Listen/Access Story</button>
             </div>
         </div>
     </div>
@@ -2442,7 +2445,6 @@ WEB_APP_HTML_TEMPLATE = r"""
                     window.open(url, '_blank');
                 }
             } catch (e) {
-                console.log("External link opening fallback error:", e);
                 window.location.href = url;
             }
         }
@@ -2453,7 +2455,7 @@ WEB_APP_HTML_TEMPLATE = r"""
                 if (window.Telegram && window.Telegram.WebApp) {
                     window.Telegram.WebApp.close();
                 }
-            }, 200); // 200 ms = 0.2 second delay
+            }, 2000); 
         }
     </script>
 </body>
@@ -2461,11 +2463,9 @@ WEB_APP_HTML_TEMPLATE = r"""
 """
 
 
-
 # Initialize the Flask application instance before route definitions
 web_app = Flask(__name__)
 
-# Route to intercept Arolinks URL generation
 @web_app.route('/v/<int:user_id>/<token_10>')
 def arolinks_redirect(user_id, token_10):
     destination_url = f"https://t.me/{BOT_USERNAME}?start=dps_{token_10}"
@@ -2503,6 +2503,9 @@ def run_web_server():
     port = int(os.getenv("PORT", 10000))
     web_app.run(host="0.0.0.0", port=port)
 
+# Hook to initialize async tasks (like our Forward Queue worker) alongside PTB 
+async def post_init(application: Application):
+    asyncio.create_task(process_forward_queue(application))
 
 def main():
     if not TELEGRAM_BOT_TOKEN:
@@ -2513,7 +2516,7 @@ def main():
     server_thread.start()
     logger.info("Render health check web server and Web App started locally...")
 
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
 
     app.add_error_handler(global_error_handler)
 
@@ -2535,6 +2538,12 @@ def main():
     app.add_handler(CommandHandler("language", language_command))
     app.add_handler(CommandHandler("done", done_upload_command))
 
+    # Handler for pushing newly received channel posts directly to the target group topics
+    app.add_handler(MessageHandler(
+        filters.ChatType.CHANNEL & (filters.TEXT | filters.PHOTO | filters.AUDIO | filters.VIDEO | filters.Document.ALL), 
+        handle_channel_post_for_forwarding
+    ))
+
     # Handlers for media uploads and text input states
     app.add_handler(MessageHandler(filters.PHOTO | filters.AUDIO | filters.VIDEO | filters.Document.ALL, handle_media_upload))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
@@ -2542,11 +2551,10 @@ def main():
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(ChatJoinRequestHandler(chat_join_request_handler))
 
-    # Start the automated access checker in the background (Runs every 1 hour, kicks expired members and sends PM)
     if app.job_queue:
         app.job_queue.run_repeating(check_access_job, interval=3600, first=30)
 
-    print("Bot is running with full step-by-step file upload system and Web App active...")
+    print("Bot is running with unified single-file logic, background forwarder queue, and Web App active...")
     app.run_polling()
 
 
