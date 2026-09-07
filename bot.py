@@ -85,6 +85,14 @@ VERIFICATION_STATE = {}
 RATE_LIMIT_CACHE = {}     
 
 
+def get_file_id(msg):
+    """Extracts the file_id from a message object regardless of media type."""
+    if msg.photo: return msg.photo[-1].file_id
+    if msg.video: return msg.video.file_id
+    if msg.audio: return msg.audio.file_id
+    if msg.document: return msg.document.file_id
+    return None
+
 def parse_date(date_val):
     """Safely parse mixed date types from DB to datetime."""
     if isinstance(date_val, datetime):
@@ -426,26 +434,52 @@ async def scan_database_command(update: Update, context: ContextTypes.DEFAULT_TY
     user_id = update.effective_user.id
     bot_settings = get_settings()
     if user_id not in bot_settings["admins"] and user_id not in ADMIN_IDS:
-        await update.message.reply_text("⛔ You are not authorized.")
         return
 
     db_ch = bot_settings.get("database_channel_id")
     if not db_ch:
-        await update.message.reply_text("❌ Database Channel ID is not configured in settings. Please configure it via /settings or edit settings.")
+        await update.message.reply_text("❌ Database Channel ID is not configured in settings.")
         return
 
-    progress_msg = await update.message.reply_text("🔄 <b>Scanning database channel and syncing file IDs...</b>\n\n[░░░░░░░░░░] 0%", parse_mode="HTML")
+    bot_uname = context.bot.username
+    progress_msg = await update.message.reply_text("🔄 <b>Scanning database channel and generating local file IDs...</b>", parse_mode="HTML")
     
     try:
-        for i in range(1, 11):
-            await asyncio.sleep(0.5)
-            percent = i * 10
-            bar = "█" * (i) + "░" * (10 - i)
-            await progress_msg.edit_text(f"🔄 <b>Scanning database channel...</b>\n\n[{bar}] {percent}%", parse_mode="HTML")
+        all_channels = list(channels_collection.find({}))
+        updated_count = 0
+        
+        for ch in all_channels:
+            bot_files = ch.get("bot_files", {})
+            if bot_uname not in bot_files:
+                new_poster_id = None
+                new_demos = []
+                
+                # Fetch original DB channel messages to generate native file IDs for this bot
+                for idx, msg_id in enumerate(ch.get("db_channel_msg_ids", [])):
+                    try:
+                        fwd_msg = await context.bot.forward_message(chat_id=user_id, from_chat_id=db_ch, message_id=msg_id)
+                        f_id = get_file_id(fwd_msg)
+                        
+                        if idx == 0:
+                            new_poster_id = f_id
+                        else:
+                            new_demos.append(f_id)
+                            
+                        await fwd_msg.delete()
+                        await asyncio.sleep(1) # Prevent FloodWait
+                    except Exception as e:
+                        logger.error(f"Failed to fetch msg_id {msg_id} during scan: {e}")
 
-        await progress_msg.edit_text("✅ <b>Database scan & file ID synchronization complete successfully with FloodWait protection!</b>", parse_mode="HTML")
+                # Append this bot's native files to the MongoDB document
+                channels_collection.update_one(
+                    {"token": ch["token"]},
+                    {"$set": {f"bot_files.{bot_uname}": {"poster": new_poster_id, "demos": new_demos}}}
+                )
+                updated_count += 1
+
+        await progress_msg.edit_text(f"✅ <b>Database scan complete!</b>\nSynced <b>{updated_count}</b> new stories for @{bot_uname}.", parse_mode="HTML")
     except Exception as e:
-        await update.message.reply_text(f"❌ Scan failed: {e}")
+        await progress_msg.edit_text(f"❌ Scan failed: {e}")
 
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -517,7 +551,7 @@ async def render_channel_list_page(update: Update, context: ContextTypes.DEFAULT
     all_channels = list(channels_collection.find({}))
     if search_filter:
         sf = normalize_text(search_filter)
-        items = [ch for ch in all_channels if sf in normalize_text(ch.get('name', '')) or sf in str(ch.get('id', ''))]
+        items = [ch for ch in all_channels if sf in normalize_text(ch['name']) or sf in str(ch.get('id', ''))]
     else:
         items = all_channels
 
@@ -538,7 +572,7 @@ async def render_channel_list_page(update: Update, context: ContextTypes.DEFAULT
         cats_val = ch.get('categories') or [ch.get('category', 'General')]
         cats_str = ", ".join(cats_val)
         lines.append(
-            f"<blockquote>{idx}. <b>{ch.get('name', 'Unknown')}</b> (ID: <code>{ch.get('id')}</code>)\n"
+            f"<blockquote>{idx}. <b>{ch['name']}</b> (ID: <code>{ch.get('id')}</code>)\n"
             f"Type: {ch.get('type')} | Cats: {cats_str}</blockquote>"
         )
     
@@ -919,7 +953,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                             [InlineKeyboardButton("🗑️ Delete Channel", callback_data=f"confirm_del_ch_{ch.get('id')}")],
                             [InlineKeyboardButton("❌ Cancel", callback_data="confirm_no")]
                         ]
-                        await update.message.reply_text(f"📁 Selected Channel: <b>{ch.get('name', 'Unknown')}</b>. Choose action:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+                        await update.message.reply_text(f"📁 Selected Channel: <b>{ch['name']}</b>. Choose action:", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
                     else:
                         await update.message.reply_text("❌ Invalid serial number range.")
                 except ValueError:
@@ -1146,10 +1180,9 @@ async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if state == "upload_step_2_poster":
         if update.message.photo:
-            file_id = update.message.photo[-1].file_id
-            state_data["poster_file_id"] = file_id
+            state_data["poster_msg_id"] = update.message.message_id
             try:
-                file_obj = await context.bot.get_file(file_id)
+                file_obj = await context.bot.get_file(update.message.photo[-1].file_id)
                 state_data["poster_url"] = safe_url(file_obj.file_path, "https://files.catbox.moe/aqak0m.jpg")
             except Exception:
                 state_data["poster_url"] = "https://files.catbox.moe/aqak0m.jpg"
@@ -1164,30 +1197,12 @@ async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     elif state == "upload_step_3_demos":
-        if "demo_files" not in state_data:
-            state_data["demo_files"] = []
+        if "demo_msg_ids" not in state_data:
+            state_data["demo_msg_ids"] = []
 
-        file_id = None
-        if update.message.audio:
-            file_id = update.message.audio.file_id
-        elif update.message.video:
-            file_id = update.message.video.file_id
-        elif update.message.document:
-            file_id = update.message.document.file_id
-        elif update.message.photo:
-            file_id = update.message.photo[-1].file_id
-
-        if file_id:
-            state_data["demo_files"].append(file_id)
-            
-            db_ch = bot_settings.get("database_channel_id")
-            if db_ch:
-                try:
-                    await context.bot.forward_message(chat_id=db_ch, from_chat_id=update.effective_chat.id, message_id=update.message.message_id)
-                except Exception as e:
-                    logger.error(f"Failed to forward file to database channel: {e}")
-
-            await update.message.reply_text(f"✅ Demo file received! Total added: {len(state_data['demo_files'])}. Send more or type /done.")
+        if update.message.audio or update.message.video or update.message.document or update.message.photo:
+            state_data["demo_msg_ids"].append(update.message.message_id)
+            await update.message.reply_text(f"✅ Demo file received! Total added: {len(state_data['demo_msg_ids'])}. Send more or type /done.")
         return
 
 
@@ -1199,8 +1214,11 @@ async def done_upload_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if user_id in PENDING_ADMIN_ACTIONS and PENDING_ADMIN_ACTIONS[user_id] == "upload_step_3_demos":
         state_data = context.user_data.get("upload_state", {})
+        bot_uname = context.bot.username
+        db_ch = bot_settings.get("database_channel_id")
         
         name_val = state_data.get("name", "STORY")
+        token_10 = state_data.get("token", "")
         status_val = state_data.get("status", "Ongoing")
         type_val = state_data.get("story_type", "audio story")
         episodes_val = state_data.get("episodes", "N/A")
@@ -1209,7 +1227,36 @@ async def done_upload_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         categories_val = ", ".join(state_data.get("categories", ["General"]))
         desc_val = state_data.get("description", "")
         more_info_val = state_data.get("more_info", "")
+        
+        poster_file_id = None
+        demo_files_for_bot = []
+        db_msg_ids = []
 
+        if "poster_msg_id" in state_data and db_ch:
+            poster_caption = f"1. Poster\n2. {name_val}\n3. {token_10}"
+            sent_poster = await context.bot.copy_message(chat_id=db_ch, from_chat_id=user_id, message_id=state_data["poster_msg_id"], caption=poster_caption)
+            fwd = await context.bot.forward_message(chat_id=user_id, from_chat_id=db_ch, message_id=sent_poster.message_id)
+            poster_file_id = get_file_id(fwd)
+            db_msg_ids.append(sent_poster.message_id)
+            await fwd.delete()
+
+        if "demo_msg_ids" in state_data and db_ch:
+            for idx, d_msg_id in enumerate(state_data["demo_msg_ids"], start=1):
+                demo_caption = f"1. Demo Episode {idx}\n2. {name_val}\n3. {token_10}"
+                sent_demo = await context.bot.copy_message(chat_id=db_ch, from_chat_id=user_id, message_id=d_msg_id, caption=demo_caption)
+                fwd = await context.bot.forward_message(chat_id=user_id, from_chat_id=db_ch, message_id=sent_demo.message_id)
+                demo_files_for_bot.append(get_file_id(fwd))
+                db_msg_ids.append(sent_demo.message_id)
+                await fwd.delete()
+
+        state_data["bot_files"] = {
+            bot_uname: {
+                "poster": poster_file_id,
+                "demos": demo_files_for_bot
+            }
+        }
+        state_data["db_channel_msg_ids"] = db_msg_ids
+        
         story_info_parts = [
             f"🎧 <b>{name_val.upper()}</b>",
             f"<i>{status_val} | {type_val}</i>\n",
@@ -1224,6 +1271,10 @@ async def done_upload_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             story_info_parts.append(f"\n📌 <b>More info:</b> {more_info_val}")
 
         state_data["story_info"] = "\n".join(story_info_parts)
+
+        # Clean up temporary msg ID state keys
+        state_data.pop("poster_msg_id", None)
+        state_data.pop("demo_msg_ids", None)
 
         channels_collection.insert_one(state_data)
         del PENDING_ADMIN_ACTIONS[user_id]
@@ -1446,14 +1497,22 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif param.startswith("domo_"):
             token_10 = param.replace("domo_", "", 1)
             matched_item = channels_collection.find_one({"token": token_10})
-            if not matched_item or not matched_item.get("demo_files"):
+            
+            bot_uname = context.bot.username
+            demo_files = matched_item.get("bot_files", {}).get(bot_uname, {}).get("demos", []) if matched_item else []
+            
+            # Fallback for old records 
+            if not demo_files and matched_item:
+                demo_files = matched_item.get("demo_files", [])
+
+            if not matched_item or not demo_files:
                 await update.message.reply_text("❌ Demo episodes not found.")
                 return
 
             sent_demo_header = await update.message.reply_text(f"📥 <b>Demo Episodes for {matched_item.get('name', 'Story')}:</b>", parse_mode="HTML")
             safe_delete_later(context, sent_demo_header.chat_id, sent_demo_header.message_id, 600)
 
-            for f_id in matched_item["demo_files"]:
+            for f_id in demo_files:
                 sent_f = None
                 try:
                     sent_f = await update.message.reply_audio(audio=f_id)
@@ -1506,18 +1565,15 @@ async def handle_search_message_logic(update: Update, context: ContextTypes.DEFA
     found_items = []
     for ch in all_channels:
         cats = [normalize_text(c) for c in ch.get("categories", [ch.get("category", "")])]
-        # Added .get() to prevent KeyError if "name" is missing in older DB imports
-        if norm_query in normalize_text(ch.get("name", "Unknown")) or any(norm_query in c for c in cats):
+        if norm_query in normalize_text(ch["name"]) or any(norm_query in c for c in cats):
             found_items.append(ch)
 
     if not found_items and all_channels:
-        # Supplied dictionary to process.extract so it returns 3-tuples (choice, score, key) instead of 2-tuples
-        channel_names = {i: normalize_text(ch.get("name", "Unknown")) for i, ch in enumerate(all_channels)}
-        fuzzy_results = process.extract(norm_query, channel_names, limit=5, scorer=fuzz.token_sort_ratio)
+        channel_names = [ch["name"] for ch in all_channels]
+        fuzzy_results = process.extract(norm_query, [normalize_text(n) for n in channel_names], limit=5, scorer=fuzz.token_sort_ratio)
         
         matched_indices = []
         for res in fuzzy_results:
-            # Fuzzy match now successfully unpacks the index because dictionary returns 3 elements
             if len(res) >= 3 and res[1] >= 40:
                 idx = res[2]
                 if 0 <= idx < len(all_channels):
@@ -1527,7 +1583,11 @@ async def handle_search_message_logic(update: Update, context: ContextTypes.DEFA
 
     if len(found_items) >= 1:
         item = found_items[0]
-        poster_id = item.get("poster_file_id", item.get("poster_url", "https://files.catbox.moe/aqak0m.jpg"))
+        
+        poster_id = item.get("bot_files", {}).get(bot_username, {}).get("poster")
+        if not poster_id:
+            poster_id = item.get("poster_file_id", item.get("poster_url", "https://files.catbox.moe/aqak0m.jpg"))
+            
         title = item.get("name", "Unknown")
         token_10 = item.get("token", "")
         
@@ -1562,7 +1622,7 @@ async def handle_search_message_logic(update: Update, context: ContextTypes.DEFA
 
         keyboard = [
             [InlineKeyboardButton("🎧 Get Demo Episodes", url=domo_link)],
-            [InlineKeyboardButton("🎶 Listen/Access Story", url=access_link)],
+            [InlineKeyboardButton("✨ Listen/Access Story", url=access_link)],
         ]
         
         # Check chat type to prevent Button_type_invalid in groups
@@ -1580,17 +1640,7 @@ async def handle_search_message_logic(update: Update, context: ContextTypes.DEFA
             )
             safe_delete_later(context, sent_poster.chat_id, sent_poster.message_id, 600)
         except Exception as e:
-            logger.error(f"Failed to send poster photo: {e}. Falling back to text response.")
-            # Added Text Fallback: If Telegram servers reject the URL, it ensures the user still gets a response
-            try:
-                sent_text = await update.message.reply_text(
-                    text=caption,
-                    parse_mode="HTML",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-                safe_delete_later(context, sent_text.chat_id, sent_text.message_id, 600)
-            except Exception as e2:
-                logger.error(f"Failed to send fallback text: {e2}")
+            logger.error(f"Failed to send poster photo: {e}")
 
         if len(found_items) > 1:
             matching_names = [f"• <b><code>{fi.get('name', 'Unknown')}</code></b>" for fi in found_items]
@@ -1763,14 +1813,20 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("get_demos_"):
         token_10 = data.replace("get_demos_", "")
         matched_item = channels_collection.find_one({"token": token_10})
-        if not matched_item or not matched_item.get("demo_files"):
+        
+        bot_uname = context.bot.username
+        demo_files = matched_item.get("bot_files", {}).get(bot_uname, {}).get("demos", []) if matched_item else []
+        if not demo_files and matched_item:
+            demo_files = matched_item.get("demo_files", [])
+            
+        if not matched_item or not demo_files:
             await query.message.reply_text("❌ Demo episodes not found.")
             return
 
         sent_demo_header = await query.message.reply_text("📥 <b>Here are your requested Demo Episodes:</b>", parse_mode="HTML")
         safe_delete_later(context, sent_demo_header.chat_id, sent_demo_header.message_id, 600)
 
-        for f_id in matched_item["demo_files"]:
+        for f_id in demo_files:
             sent_f = None
             try:
                 sent_f = await query.message.reply_audio(audio=f_id)
@@ -2196,7 +2252,7 @@ WEB_APP_HTML_TEMPLATE = r"""
             <p id="det-info" style="margin: 0 0 16px 0; font-size: 13px; line-height: 1.5; color: var(--text-secondary); white-space: pre-wrap;"></p>
             <div class="action-buttons-container">
                 <button id="btn-get-demos" class="action-btn btn-demo" onclick="handleActionAndClose(window.demoUrl)">🎧 Get Demo Episodes</button>
-                <button id="btn-story-access" class="action-btn btn-access" onclick="handleActionAndClose(window.accessUrl)">🎶 Listen/Access Story</button>
+                <button id="btn-story-access" class="action-btn btn-access" onclick="handleActionAndClose(window.accessUrl)">✨ Listen/Access Story</button>
             </div>
         </div>
     </div>
@@ -2397,7 +2453,7 @@ WEB_APP_HTML_TEMPLATE = r"""
                 if (window.Telegram && window.Telegram.WebApp) {
                     window.Telegram.WebApp.close();
                 }
-            }, 2000); // 2000 ms = 2 second delay
+            }, 200); // 200 ms = 0.2 second delay
         }
     </script>
 </body>
