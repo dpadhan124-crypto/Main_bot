@@ -457,7 +457,8 @@ async def scan_database_command(update: Update, context: ContextTypes.DEFAULT_TY
                 # Fetch original DB channel messages to generate native file IDs for this bot
                 for idx, msg_id in enumerate(ch.get("db_channel_msg_ids", [])):
                     try:
-                        fwd_msg = await context.bot.forward_message(chat_id=user_id, from_chat_id=db_ch, message_id=msg_id)
+                        # Fixed Blinking: Forward to db_ch directly so the admin doesn't see a flashing message
+                        fwd_msg = await context.bot.forward_message(chat_id=db_ch, from_chat_id=db_ch, message_id=msg_id)
                         f_id = get_file_id(fwd_msg)
                         
                         if idx == 0:
@@ -1181,6 +1182,10 @@ async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
     if state == "upload_step_2_poster":
         if update.message.photo:
             state_data["poster_msg_id"] = update.message.message_id
+            
+            # FIXED BLINKING ISSUE: Capture file_id instantly during upload
+            state_data["poster_file_id"] = get_file_id(update.message)
+            
             try:
                 file_obj = await context.bot.get_file(update.message.photo[-1].file_id)
                 state_data["poster_url"] = safe_url(file_obj.file_path, "https://files.catbox.moe/aqak0m.jpg")
@@ -1199,10 +1204,15 @@ async def handle_media_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif state == "upload_step_3_demos":
         if "demo_msg_ids" not in state_data:
             state_data["demo_msg_ids"] = []
+            state_data["demo_file_ids"] = []
 
         if update.message.audio or update.message.video or update.message.document or update.message.photo:
-            state_data["demo_msg_ids"].append(update.message.message_id)
-            await update.message.reply_text(f"✅ Demo file received! Total added: {len(state_data['demo_msg_ids'])}. Send more or type /done.")
+            # FIXED BLINKING ISSUE: Capture file_id instantly during upload
+            f_id = get_file_id(update.message)
+            if f_id:
+                state_data["demo_msg_ids"].append(update.message.message_id)
+                state_data["demo_file_ids"].append(f_id)
+                await update.message.reply_text(f"✅ Demo file received! Total added: {len(state_data['demo_msg_ids'])}. Send more or type /done.")
         return
 
 
@@ -1228,26 +1238,22 @@ async def done_upload_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         desc_val = state_data.get("description", "")
         more_info_val = state_data.get("more_info", "")
         
-        poster_file_id = None
-        demo_files_for_bot = []
         db_msg_ids = []
+
+        # FIXED BLINKING ISSUE: Use pre-captured file IDs instead of forwarding back to the admin and deleting
+        poster_file_id = state_data.get("poster_file_id")
+        demo_files_for_bot = state_data.get("demo_file_ids", [])
 
         if "poster_msg_id" in state_data and db_ch:
             poster_caption = f"1. Poster\n2. {name_val}\n3. {token_10}"
             sent_poster = await context.bot.copy_message(chat_id=db_ch, from_chat_id=user_id, message_id=state_data["poster_msg_id"], caption=poster_caption)
-            fwd = await context.bot.forward_message(chat_id=user_id, from_chat_id=db_ch, message_id=sent_poster.message_id)
-            poster_file_id = get_file_id(fwd)
             db_msg_ids.append(sent_poster.message_id)
-            await fwd.delete()
 
         if "demo_msg_ids" in state_data and db_ch:
             for idx, d_msg_id in enumerate(state_data["demo_msg_ids"], start=1):
                 demo_caption = f"1. Demo Episode {idx}\n2. {name_val}\n3. {token_10}"
                 sent_demo = await context.bot.copy_message(chat_id=db_ch, from_chat_id=user_id, message_id=d_msg_id, caption=demo_caption)
-                fwd = await context.bot.forward_message(chat_id=user_id, from_chat_id=db_ch, message_id=sent_demo.message_id)
-                demo_files_for_bot.append(get_file_id(fwd))
                 db_msg_ids.append(sent_demo.message_id)
-                await fwd.delete()
 
         state_data["bot_files"] = {
             bot_uname: {
@@ -1275,6 +1281,8 @@ async def done_upload_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Clean up temporary msg ID state keys
         state_data.pop("poster_msg_id", None)
         state_data.pop("demo_msg_ids", None)
+        state_data.pop("poster_file_id", None)
+        state_data.pop("demo_file_ids", None)
 
         channels_collection.insert_one(state_data)
         del PENDING_ADMIN_ACTIONS[user_id]
@@ -2094,7 +2102,43 @@ WEB_APP_HTML_TEMPLATE = r"""
         
         .filter-group { display: flex; flex-direction: column; gap: 6px; }
         .filter-group label { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
-        .filter-group select, .filter-group input { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid var(--card-border); background: var(--bg-color); color: #fff; font-size: 14px; outline: none; }
+        
+        /* NEW CUSTOM SELECT DROPDOWN STYLING */
+        .filter-group select, .filter-group input {
+            width: 100%; 
+            padding: 12px; 
+            border-radius: 10px; 
+            border: 1px solid var(--card-border); 
+            background-color: var(--bg-color); 
+            color: #fff; 
+            font-size: 14px; 
+            outline: none; 
+            transition: 0.2s;
+        }
+        
+        .filter-group select {
+            cursor: pointer;
+            appearance: none;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+            background-repeat: no-repeat;
+            background-position: right 14px center;
+            background-size: 16px;
+            padding-right: 40px;
+        }
+        
+        .filter-group select:focus, .filter-group input:focus {
+            border-color: var(--accent-solid);
+            box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
+        }
+        
+        .filter-group select option {
+            background-color: var(--card-bg);
+            color: #fff;
+        }
+        /* END NEW DROPDOWN STYLING */
+
         .modal-actions { display: flex; gap: 10px; margin-top: 10px; }
         .modal-actions button { flex: 1; padding: 12px; border-radius: 10px; font-weight: 700; border: none; cursor: pointer; }
         .btn-apply { background: var(--accent-gradient); color: #fff; }
