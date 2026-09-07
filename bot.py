@@ -2057,8 +2057,7 @@ async def check_access_job(context: ContextTypes.DEFAULT_TYPE):
                 {"$pull": {"access_records": {"channel_id": {"$in": [r["channel_id"] for r in records_to_remove]}}}}
             )
 
-
-# --- WEB APP TEMPLATE (With Filter Modal & 3-Dot Implementation) ---
+# --- WEB APP TEMPLATE (With Custom Select UI & New Logo) ---
 WEB_APP_HTML_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="en">
@@ -2100,44 +2099,21 @@ WEB_APP_HTML_TEMPLATE = r"""
         .modal-content { background: var(--card-bg); width: 100%; border-top-left-radius: 20px; border-top-right-radius: 20px; padding: 24px; transform: translateY(100%); transition: transform 0.3s; border-top: 1px solid var(--card-border); display: flex; flex-direction: column; gap: 16px; max-height: 85vh; overflow-y: auto; }
         .modal-overlay.active .modal-content { transform: translateY(0); }
         
-        .filter-group { display: flex; flex-direction: column; gap: 6px; }
-        .filter-group label { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+        .filter-group { display: flex; flex-direction: column; gap: 6px; position: relative; }
+        .filter-group > label { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
         
-        /* NEW CUSTOM SELECT DROPDOWN STYLING */
-        .filter-group select, .filter-group input {
-            width: 100%; 
-            padding: 12px; 
-            border-radius: 10px; 
-            border: 1px solid var(--card-border); 
-            background-color: var(--bg-color); 
-            color: #fff; 
-            font-size: 14px; 
-            outline: none; 
-            transition: 0.2s;
-        }
+        /* CUSTOM SELECT UI (Fixes native OS popup) */
+        .custom-select { position: relative; width: 100%; user-select: none; }
+        .select-selected { padding: 12px; border-radius: 10px; border: 1px solid var(--card-border); background-color: var(--bg-color); color: #fff; font-size: 14px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: border-color 0.2s; }
+        .select-selected::after { content: ""; border: solid var(--text-secondary); border-width: 0 2px 2px 0; display: inline-block; padding: 3px; transform: rotate(45deg); transition: transform 0.2s; margin-right: 4px; }
+        .select-selected.select-arrow-active { border-color: var(--accent-solid); box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2); }
+        .select-selected.select-arrow-active::after { transform: rotate(-135deg); margin-top: 4px; }
         
-        .filter-group select {
-            cursor: pointer;
-            appearance: none;
-            -webkit-appearance: none;
-            -moz-appearance: none;
-            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
-            background-repeat: no-repeat;
-            background-position: right 14px center;
-            background-size: 16px;
-            padding-right: 40px;
-        }
-        
-        .filter-group select:focus, .filter-group input:focus {
-            border-color: var(--accent-solid);
-            box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
-        }
-        
-        .filter-group select option {
-            background-color: var(--card-bg);
-            color: #fff;
-        }
-        /* END NEW DROPDOWN STYLING */
+        .select-items { position: absolute; background-color: var(--card-bg); top: calc(100% + 4px); left: 0; right: 0; z-index: 999; border-radius: 10px; border: 1px solid var(--card-border); max-height: 180px; overflow-y: auto; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); }
+        .select-items div { padding: 12px; cursor: pointer; color: #fff; font-size: 14px; border-bottom: 1px solid var(--card-border); transition: background 0.2s; }
+        .select-items div:last-child { border-bottom: none; }
+        .select-items div:hover, .select-items div:active { background-color: rgba(139, 92, 246, 0.2); color: #c084fc; }
+        .select-hide { display: none; }
 
         .modal-actions { display: flex; gap: 10px; margin-top: 10px; }
         .modal-actions button { flex: 1; padding: 12px; border-radius: 10px; font-weight: 700; border: none; cursor: pointer; }
@@ -2146,7 +2122,7 @@ WEB_APP_HTML_TEMPLATE = r"""
 
         /* Story List View */
         .story-list { display: flex; flex-direction: column; gap: 14px; }
-        .story-card { display: flex; background: var(--card-bg); border-radius: 14px; overflow: hidden; border: 1px solid var(--card-border); cursor: pointer; transition: transform 0.2s, border-color 0.2s; position: relative; }
+        .story-card { display: flex; background: var(--card-bg); border-radius: 14px; overflow: hidden; border: 1px solid var(--card-border); cursor: pointer; transition: transform 0.2s; position: relative; }
         .story-card:active { transform: scale(0.98); }
         .story-card img { width: 110px; height: 110px; object-fit: cover; background: #000; }
         .story-info { padding: 12px; display: flex; flex-direction: column; justify-content: center; flex-grow: 1; gap: 4px; }
@@ -2154,10 +2130,8 @@ WEB_APP_HTML_TEMPLATE = r"""
         .story-meta { font-size: 12px; color: var(--text-secondary); }
         .badge { display: inline-block; padding: 2px 8px; background: rgba(139, 92, 246, 0.15); color: #c084fc; border-radius: 6px; font-size: 10px; font-weight: 700; text-transform: uppercase; width: fit-content; margin-top: 4px; }
 
-        /* Loading Indicator */
+        /* Loading Indicator & Secondary Views */
         .loading-indicator { text-align: center; padding: 15px; font-size: 13px; color: var(--text-secondary); display: none; }
-
-        /* Secondary Views (Detail & About) */
         .secondary-view { display: none; flex-direction: column; gap: 16px; animation: fadeIn 0.3s ease; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
         
@@ -2169,36 +2143,28 @@ WEB_APP_HTML_TEMPLATE = r"""
         .content-card { background: var(--card-bg); border-radius: 14px; padding: 16px; border: 1px solid var(--card-border); }
         .section-title { font-size: 15px; font-weight: 700; margin-bottom: 10px; color: var(--text-primary); }
 
-        /* Action Buttons Container */
         .action-buttons-container { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
-        .action-btn { display: flex; align-items: center; justify-content: center; padding: 12px; border-radius: 12px; font-weight: 700; font-size: 14px; text-decoration: none; text-align: center; cursor: pointer; transition: 0.2s; border: none; }
+        .action-btn { display: flex; align-items: center; justify-content: center; padding: 12px; border-radius: 12px; font-weight: 700; font-size: 14px; cursor: pointer; border: none; }
         .btn-demo { background: rgba(139, 92, 246, 0.2); color: #c084fc; border: 1px solid var(--accent-solid) !important; }
-        .btn-demo:hover { background: rgba(139, 92, 246, 0.3); }
         .btn-access { background: var(--accent-gradient); color: #fff; }
-        .btn-access:hover { opacity: 0.9; }
     </style>
 </head>
 <body>
 
-    <!-- Extract dynamic categories and genres from database -->
+    <!-- Extract dynamic categories and genres -->
     {% set ns = namespace(genres=[], categories=[]) %}
     {% for item in items %}
         {% set g = item.genra or 'General' %}
-        {% if g not in ns.genres %}
-            {% set _ = ns.genres.append(g) %}
-        {% endif %}
-        
+        {% if g not in ns.genres %}{% set _ = ns.genres.append(g) %}{% endif %}
         {% set c = item.category or 'General' %}
-        {% if c not in ns.categories %}
-            {% set _ = ns.categories.append(c) %}
-        {% endif %}
+        {% if c not in ns.categories %}{% set _ = ns.categories.append(c) %}{% endif %}
     {% endfor %}
 
     <!-- MAIN DISCOVERY DASHBOARD -->
     <div id="main-view">
         <div class="app-header">
             <div class="search-wrapper">
-                <img src="https://files.catbox.moe/aqak0m.jpg" alt="Logo" class="app-logo" onclick="openAbout()">
+                <img src="https://files.catbox.moe/x2bdcm.jpg" alt="Logo" class="app-logo" onclick="openAbout()">
                 <input type="text" id="search" class="search-bar" placeholder="Search stories, authors, genres..." onkeyup="applyFilters()">
                 <button class="filter-btn" onclick="toggleModal(true)">⋮</button>
             </div>
@@ -2207,7 +2173,6 @@ WEB_APP_HTML_TEMPLATE = r"""
         <div class="story-list" id="story-list">
             {% for item in items %}
             {% set poster = item.poster_url if item.poster_url and not item.poster_url.startswith('tg://') else ('https://api.telegram.org/file/bot8938769403:AAH9D4cCIZamgBS4kp5kB5-l2ByjSyu-PKM/' + item.poster_file_id if item.get('poster_file_id') else 'https://files.catbox.moe/aqak0m.jpg') %}
-            <!-- Added custom class 'paginated-card' for tracking batch loads -->
             <div class="story-card paginated-card" 
                  data-type="{{ (item.story_type or 'audio story') | lower }}" 
                  data-status="{{ (item.status or 'Ongoing') | lower }}" 
@@ -2233,52 +2198,73 @@ WEB_APP_HTML_TEMPLATE = r"""
     <div id="filter-modal" class="modal-overlay" onclick="handleModalOverlayClick(event)">
         <div class="modal-content">
             <h3 style="margin: 0; font-size: 18px;">Filter Stories</h3>
+            
             <div class="filter-group">
                 <label>Genre</label>
-                <select id="filter-genre">
-                    <option value="all">All Genres</option>
-                    {% for genre in ns.genres|sort %}
-                    <option value="{{ genre | lower }}">{{ genre | title }}</option>
-                    {% endfor %}
-                </select>
+                <div class="custom-select" id="filter-genre" data-value="all">
+                    <div class="select-selected" onclick="toggleCustomSelect(this)">All Genres</div>
+                    <div class="select-items select-hide">
+                        <div onclick="setCustomSelect(this, 'all', 'All Genres')">All Genres</div>
+                        {% for genre in ns.genres|sort %}
+                        <div onclick="setCustomSelect(this, '{{ genre | lower }}', '{{ genre | title }}')">{{ genre | title }}</div>
+                        {% endfor %}
+                    </div>
+                </div>
             </div>
+            
             <div class="filter-group">
                 <label>Category</label>
-                <select id="filter-category">
-                    <option value="all">All Categories</option>
-                    {% for category in ns.categories|sort %}
-                    <option value="{{ category | lower }}">{{ category | title }}</option>
-                    {% endfor %}
-                </select>
+                <div class="custom-select" id="filter-category" data-value="all">
+                    <div class="select-selected" onclick="toggleCustomSelect(this)">All Categories</div>
+                    <div class="select-items select-hide">
+                        <div onclick="setCustomSelect(this, 'all', 'All Categories')">All Categories</div>
+                        {% for category in ns.categories|sort %}
+                        <div onclick="setCustomSelect(this, '{{ category | lower }}', '{{ category | title }}')">{{ category | title }}</div>
+                        {% endfor %}
+                    </div>
+                </div>
             </div>
+
             <div class="filter-group">
                 <label>Access</label>
-                <select id="filter-access">
-                    <option value="all">All Access Types</option>
-                    <option value="free">Free</option>
-                    <option value="verify">Verify</option>
-                    <option value="premium">Premium</option>
-                </select>
+                <div class="custom-select" id="filter-access" data-value="all">
+                    <div class="select-selected" onclick="toggleCustomSelect(this)">All Access Types</div>
+                    <div class="select-items select-hide">
+                        <div onclick="setCustomSelect(this, 'all', 'All Access Types')">All Access Types</div>
+                        <div onclick="setCustomSelect(this, 'free', 'Free')">Free</div>
+                        <div onclick="setCustomSelect(this, 'verify', 'Verify')">Verify</div>
+                        <div onclick="setCustomSelect(this, 'premium', 'Premium')">Premium</div>
+                    </div>
+                </div>
             </div>
+
             <div class="filter-group">
                 <label>Type</label>
-                <select id="filter-type">
-                    <option value="all">All Types</option>
-                    <option value="audio story">Audio Story</option>
-                    <option value="short drama">Short Drama</option>
-                </select>
+                <div class="custom-select" id="filter-type" data-value="all">
+                    <div class="select-selected" onclick="toggleCustomSelect(this)">All Types</div>
+                    <div class="select-items select-hide">
+                        <div onclick="setCustomSelect(this, 'all', 'All Types')">All Types</div>
+                        <div onclick="setCustomSelect(this, 'audio story', 'Audio Story')">Audio Story</div>
+                        <div onclick="setCustomSelect(this, 'short drama', 'Short Drama')">Short Drama</div>
+                    </div>
+                </div>
             </div>
+
             <div class="filter-group">
                 <label>Status</label>
-                <select id="filter-status">
-                    <option value="all">All Statuses</option>
-                    <option value="completed">Completed</option>
-                    <option value="ongoing">Ongoing</option>
-                </select>
+                <div class="custom-select" id="filter-status" data-value="all">
+                    <div class="select-selected" onclick="toggleCustomSelect(this)">All Statuses</div>
+                    <div class="select-items select-hide">
+                        <div onclick="setCustomSelect(this, 'all', 'All Statuses')">All Statuses</div>
+                        <div onclick="setCustomSelect(this, 'completed', 'Completed')">Completed</div>
+                        <div onclick="setCustomSelect(this, 'ongoing', 'Ongoing')">Ongoing</div>
+                    </div>
+                </div>
             </div>
+
             <div class="modal-actions">
                 <button class="btn-clear" onclick="clearFilters()">Clear</button>
-                <button class="btn-apply" onclick="toggleModal(false); applyFilters();">Apply Filters</button>
+                <button class="btn-apply" onclick="applyFiltersAndClose()">Apply Filters</button>
             </div>
         </div>
     </div>
@@ -2308,15 +2294,12 @@ WEB_APP_HTML_TEMPLATE = r"""
     <!-- ABOUT VIEW -->
     <div id="about-view" class="secondary-view">
         <button class="back-nav-btn" onclick="closeSecondaryViews()">« Back to Stories</button>
-        
         <div class="content-card" style="text-align: center; padding: 40px 20px; margin-top: 10px;">
-            <img src="https://files.catbox.moe/aqak0m.jpg" alt="Logo" style="width: 90px; height: 90px; border-radius: 20px; border: 2px solid var(--accent-solid); margin-bottom: 20px;">
-            
+            <img src="https://files.catbox.moe/x2bdcm.jpg" alt="Logo" style="width: 90px; height: 90px; border-radius: 20px; border: 2px solid var(--accent-solid); margin-bottom: 20px;">
             <h2 style="margin: 0 0 10px 0; font-size: 22px; color: var(--text-primary);">FM Stories Hub</h2>
             <p style="margin: 0; font-size: 14px; color: var(--text-secondary); line-height: 1.6;">
                 Welcome to your premium destination for the best audio stories and short dramas. We bring you high-quality entertainment delivered straight to your device.
             </p>
-            
             <div style="margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--card-border);">
                 <p style="margin: 0; font-size: 13px; color: var(--text-secondary);">
                     Powered by <strong style="color: var(--accent-solid);">@Dps_storiesbot</strong>
@@ -2333,13 +2316,44 @@ WEB_APP_HTML_TEMPLATE = r"""
         const batchSize = 10;
         let isFilteringOrSearching = false;
 
+        /* CUSTOM SELECT LOGIC */
+        function toggleCustomSelect(element) {
+            // Close all other selects first
+            document.querySelectorAll('.select-items').forEach(el => {
+                if (el !== element.nextElementSibling) el.classList.add('select-hide');
+            });
+            document.querySelectorAll('.select-selected').forEach(el => {
+                if (el !== element) el.classList.remove('select-arrow-active');
+            });
+            
+            element.nextElementSibling.classList.toggle("select-hide");
+            element.classList.toggle("select-arrow-active");
+        }
+
+        function setCustomSelect(element, val, text) {
+            let wrapper = element.closest('.custom-select');
+            wrapper.setAttribute('data-value', val);
+            wrapper.querySelector('.select-selected').innerText = text;
+            
+            // Close the dropdown after selection
+            wrapper.querySelector('.select-items').classList.add('select-hide');
+            wrapper.querySelector('.select-selected').classList.remove('select-arrow-active');
+        }
+
+        // Close dropdowns when clicking outside
+        document.addEventListener("click", function (e) {
+            if (!e.target.matches('.select-selected')) {
+                document.querySelectorAll('.select-items').forEach(el => el.classList.add('select-hide'));
+                document.querySelectorAll('.select-selected').forEach(el => el.classList.remove('select-arrow-active'));
+            }
+        });
+
         document.addEventListener("DOMContentLoaded", () => {
             updateVisibleCards();
         });
 
         window.addEventListener('scroll', () => {
             if (isFilteringOrSearching) return;
-            
             if ((window.innerHeight + window.scrollY) >= document.body.offsetHeight - 100) {
                 let cards = document.getElementsByClassName('paginated-card');
                 if (currentVisibleLimit < cards.length) {
@@ -2367,31 +2381,33 @@ WEB_APP_HTML_TEMPLATE = r"""
         }
 
         function normalizeText(str) {
-            if (!str) return '';
-            return str.normalize('NFKC').toLowerCase().trim();
+            return (!str) ? '' : str.normalize('NFKC').toLowerCase().trim();
         }
 
         function toggleModal(show) {
             const modal = document.getElementById('filter-modal');
-            if (show) {
-                modal.classList.add('active');
-            } else {
-                modal.classList.remove('active');
-            }
+            if (show) modal.classList.add('active');
+            else modal.classList.remove('active');
         }
 
         function handleModalOverlayClick(e) {
-            if (e.target.id === 'filter-modal') {
-                toggleModal(false);
-            }
+            if (e.target.id === 'filter-modal') toggleModal(false);
         }
 
         function clearFilters() {
-            document.getElementById('filter-genre').value = 'all';
-            document.getElementById('filter-access').value = 'all';
-            document.getElementById('filter-category').value = 'all';
-            document.getElementById('filter-type').value = 'all';
-            document.getElementById('filter-status').value = 'all';
+            // Reset custom select data-values and text
+            const resetSelect = (id, text) => {
+                let wrapper = document.getElementById(id);
+                wrapper.setAttribute('data-value', 'all');
+                wrapper.querySelector('.select-selected').innerText = text;
+            };
+            
+            resetSelect('filter-genre', 'All Genres');
+            resetSelect('filter-category', 'All Categories');
+            resetSelect('filter-access', 'All Access Types');
+            resetSelect('filter-type', 'All Types');
+            resetSelect('filter-status', 'All Statuses');
+            
             document.getElementById('search').value = '';
             toggleModal(false);
             isFilteringOrSearching = false;
@@ -2399,13 +2415,20 @@ WEB_APP_HTML_TEMPLATE = r"""
             updateVisibleCards();
         }
 
+        function applyFiltersAndClose() {
+            toggleModal(false);
+            applyFilters();
+        }
+
         function applyFilters() {
             let searchStr = normalizeText(document.getElementById('search').value);
-            let fGenre = document.getElementById('filter-genre').value.toLowerCase();
-            let fAccess = document.getElementById('filter-access').value.toLowerCase();
-            let fCategory = document.getElementById('filter-category').value.toLowerCase();
-            let fType = document.getElementById('filter-type').value.toLowerCase();
-            let fStatus = document.getElementById('filter-status').value.toLowerCase();
+            
+            // Read from data-value attribute instead of .value
+            let fGenre = document.getElementById('filter-genre').getAttribute('data-value');
+            let fAccess = document.getElementById('filter-access').getAttribute('data-value');
+            let fCategory = document.getElementById('filter-category').getAttribute('data-value');
+            let fType = document.getElementById('filter-type').getAttribute('data-value');
+            let fStatus = document.getElementById('filter-status').getAttribute('data-value');
 
             if (searchStr !== "" || fGenre !== 'all' || fAccess !== 'all' || fCategory !== 'all' || fType !== 'all' || fStatus !== 'all') {
                 isFilteringOrSearching = true;
@@ -2490,7 +2513,6 @@ WEB_APP_HTML_TEMPLATE = r"""
                     window.open(url, '_blank');
                 }
             } catch (e) {
-                console.log("External link opening fallback error:", e);
                 window.location.href = url;
             }
         }
@@ -2498,15 +2520,14 @@ WEB_APP_HTML_TEMPLATE = r"""
         function handleActionAndClose(url) {
             openExternalLink(url);
             setTimeout(() => {
-                if (window.Telegram && window.Telegram.WebApp) {
-                    window.Telegram.WebApp.close();
-                }
-            }, 200); // 200 ms = 0.2 second delay
+                if (window.Telegram && window.Telegram.WebApp) window.Telegram.WebApp.close();
+            }, 200); 
         }
     </script>
 </body>
 </html>
 """
+
 
 
 
